@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,9 +26,9 @@ const (
 
 type syncPipeChannel struct {
 	sync      *sync.WaitGroup
-	addrChan  chan *net.IPAddr
+	addrChan  chan string
 	close     chan struct{}
-	addresses []*net.IPAddr
+	addresses []string
 }
 
 var localAddr *net.IPNet = getLocalHostAddress()
@@ -70,7 +71,7 @@ func ping(ip string) {
 		panic(err)
 	}
 
-	monitor(icmpConn, ip, bytes, nil)
+	monitor(icmpConn, ip, bytes)
 
 }
 
@@ -88,6 +89,7 @@ func pingLocalNetwork() {
 	if err != nil {
 		log.Fatalf("error establishing icmp %e", err)
 	}
+	defer icmpListen.Close()
 
 	var bytes []byte
 	bytes, err = icmpMsg.Marshal(bytes)
@@ -97,77 +99,33 @@ func pingLocalNetwork() {
 
 	syncPipleChan := newSyncPipeChan()
 	go syncPipleChan.processAddresses()
+	go syncPipleChan.read(icmpListen)
 	for i := ipStartByte; i <= ipEndByte; i++ {
-		syncPipleChan.sync.Add(1)
 		ip := "192.168.1." + strconv.Itoa(i)
-		go monitor(icmpListen, ip, bytes, syncPipleChan)
-		syncPipleChan.sync.Wait()
+		go monitor(icmpListen, ip, bytes)
 	}
+	syncPipleChan.sync.Wait()
 	fmt.Println("closing")
 	syncPipleChan.close <- struct{}{}
-	defer icmpListen.Close()
 	log.Println("result addresses ", syncPipleChan.addresses)
 }
 
-func monitor(conn *icmp.PacketConn, ip string, msg []byte, syncPipe *syncPipeChannel) *net.IPAddr {
+func monitor(conn *icmp.PacketConn, ip string, msg []byte) *net.IPAddr {
 	raddr, err := net.ResolveIPAddr("ip", ip)
 	if err != nil {
 		log.Printf("error resolving raddr %e\n", err)
 		return nil
 	}
-	if syncPipe != nil {
-		defer syncPipe.sync.Done()
-	}
 
-	var buffer []byte = make([]byte, 1024)
 	for i := 0; i < 3; i++ {
 
+		conn.SetWriteDeadline(time.Now().Add(time.Millisecond * 200))
 		_, err := conn.WriteTo(msg, raddr)
 		if err != nil {
 			log.Printf("error writing to %s", raddr.IP.String())
-			return nil
+			continue
 		}
 
-		err = conn.SetReadDeadline(time.Now().Add(time.Millisecond * 50))
-		if err != nil {
-			log.Println(err)
-			return nil
-		}
-
-		n, peer, err := conn.ReadFrom(buffer)
-		if err != nil {
-			log.Printf("error reading from %s\n", raddr.IP.String())
-			return nil
-		}
-
-		reply, err := icmp.ParseMessage(1, buffer[:n])
-		if err != nil {
-			log.Printf("error parsing icmp reply %e\n", err)
-			return nil
-		}
-
-		if reply != nil {
-
-			switch reply.Type {
-			case ipv4.ICMPTypeEchoReply:
-				fmt.Printf("Repliled to icmp from %s\n", peer.String())
-				if syncPipe != nil {
-					syncPipe.addrChan <- raddr
-				}
-				return raddr
-			case ipv4.ICMPTypeParameterProblem:
-				fmt.Printf("ICMPTypeParameterProblem %s\n", peer.String())
-			case ipv4.ICMPTypeDestinationUnreachable:
-				fmt.Printf("Destination is unreachable %s\n", peer.String())
-			default:
-				body, err := reply.Body.Marshal(4)
-				if err != nil {
-					log.Printf("errrr %e\n", err)
-				}
-				fmt.Println("invalid icmp reply")
-				fmt.Println(reply.Type.Protocol(), reply.Code, string(body), reply.Checksum)
-			}
-		}
 	}
 	return nil
 }
@@ -191,7 +149,7 @@ func getLocalHostAddress() *net.IPNet {
 func newSyncPipeChan() *syncPipeChannel {
 	return &syncPipeChannel{
 		sync:     &sync.WaitGroup{},
-		addrChan: make(chan *net.IPAddr),
+		addrChan: make(chan string),
 		close:    make(chan struct{}),
 	}
 }
@@ -199,12 +157,89 @@ func newSyncPipeChan() *syncPipeChannel {
 func (pipe *syncPipeChannel) processAddresses() {
 	for {
 		select {
-		case <-pipe.addrChan:
+		case addr := <-pipe.addrChan:
 			fmt.Println("match")
-			pipe.addresses = append(pipe.addresses, <-pipe.addrChan)
+			if !slices.Contains(pipe.addresses, addr) {
+				pipe.addresses = append(pipe.addresses, addr)
+			}
 		case <-pipe.close:
 			close(pipe.addrChan)
 			return
 		}
 	}
 }
+
+func newDuration() time.Duration {
+	return time.Until(time.Now().Add(1000 * time.Millisecond))
+}
+
+func (pipe *syncPipeChannel) read(conn *icmp.PacketConn) {
+	var buffer []byte = make([]byte, 1024)
+	timeout := time.NewTimer(newDuration())
+	var timeoutOccured bool
+	go func() {
+		for {
+			select {
+			case <-timeout.C:
+				timeoutOccured = true
+			}
+		}
+	}()
+	for {
+		if timeoutOccured {
+			fmt.Println("TIMEOUT")
+			break
+		}
+		fmt.Println("start")
+		pipe.sync.Add(1)
+
+		err := conn.SetReadDeadline(time.Now().Add(time.Millisecond * 300))
+		if err != nil {
+			log.Println(err)
+		}
+		n, peer, err := conn.ReadFrom(buffer)
+		fmt.Println("wait")
+		if err != nil {
+			if peer != nil {
+				// log.Printf("error reading from %s\n", peer.String())
+				continue
+			}
+		}
+
+		reply, err := icmp.ParseMessage(1, buffer[:n])
+		if err != nil {
+			// log.Printf("error parsing icmp reply %e\n", err)
+		}
+
+		if reply != nil {
+			switch reply.Type {
+			case ipv4.ICMPTypeEchoReply:
+				fmt.Printf("Repliled to icmp from %s\n", peer.String())
+				if peer != nil {
+					timeout.Reset(newDuration())
+					pipe.addrChan <- peer.String()
+				}
+			case ipv4.ICMPTypeParameterProblem:
+				// fmt.Printf("ICMPTypeParameterProblem %s\n", peer.String())
+			case ipv4.ICMPTypeDestinationUnreachable:
+				// fmt.Printf("Destination is unreachable %s\n", peer.String())
+
+			default:
+				body, err := reply.Body.Marshal(4)
+				if err != nil {
+					log.Printf("errrr %e\n", err)
+				}
+				fmt.Println("invalid icmp reply")
+				fmt.Println(reply.Type.Protocol(), reply.Code, string(body), reply.Checksum)
+			}
+
+		}
+	}
+
+}
+
+// make cli
+// on available addr list make possible to choose between them and request connection on port :??
+// after ? connection established
+// make possible to choose file
+// send it
