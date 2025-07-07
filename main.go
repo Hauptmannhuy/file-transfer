@@ -1,6 +1,11 @@
 package main
 
+import (
+	"file-transfer/cmd"
+)
+
 func main() {
+	cmd.Execute()
 }
 
 // make cli

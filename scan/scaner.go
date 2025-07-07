@@ -15,6 +15,8 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
+var HandshakedIPs []string
+
 const (
 	ipAdressStart = "192.168.1.100"
 	ipAdressEnd   = "192.168.1.200"
@@ -58,7 +60,6 @@ func ping(ip string) {
 	if err != nil {
 		panic(err)
 	}
-
 	var bytes []byte
 	bytes, err = icmpMsg.Marshal(bytes)
 	if err != nil {
