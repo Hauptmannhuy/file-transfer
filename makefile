@@ -1,6 +1,6 @@
 run_app:
 	go build main.go
-	sudo setcap cap_net_raw+ep ./main
+	# sudo setcap cap_net_raw+ep ./main
 	./main
 
 compile_debug:

@@ -1,30 +1,17 @@
 package cmd
 
 import (
+	"file-transfer/peers"
 	scaner "file-transfer/scan"
 	"file-transfer/tcp"
 	"fmt"
+	"log"
 	"net"
-	"os"
-
-	"github.com/spf13/cobra"
 )
 
 type nodeCommand struct {
-	command *cobra.Command
-	ip      string
-	conn    *net.TCPConn
-}
-
-var rootCmd = &cobra.Command{
-	Use:   "hugo",
-	Short: "Hugo is a very fast static site generator",
-	Long: `A Fast and Flexible Static Site Generator built with
-                love by spf13 and friends in Go.
-                Complete documentation is available at https://gohugo.io/documentation/`,
-	Run: func(cmd *cobra.Command, args []string) {
-		// Do Stuff Here
-	},
+	ip   string
+	conn *net.TCPConn
 }
 
 func Execute() {
@@ -33,23 +20,27 @@ func Execute() {
 		connections := initList()
 		renderList(connections)
 	}
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+
+	go wait()
+
+	for {
+		fmt.Println("type an ip to connect")
+		connectToPeer()
 	}
+
 }
 
 func initList() []nodeCommand {
 	ips := scaner.Scan()
 	ipArr := make([]nodeCommand, len(ips))
 	for i, ip := range ips {
-		conn, err := tcp.Connect(ip)
-		if err != nil {
-			continue
-		}
+		// conn, err := tcp.Connect(ip)
+		// if err != nil {
+		// 	continue
+		// }
 		ipArr[i] = nodeCommand{
-			ip:   ip,
-			conn: conn,
+			ip: ip,
+			// conn: conn,
 		}
 	}
 	return ipArr
@@ -59,4 +50,66 @@ func renderList(ipArray []nodeCommand) {
 	for _, v := range ipArray {
 		fmt.Println(v.ip)
 	}
+}
+
+func wait() {
+	listener, err := tcp.Listen()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for {
+		var savedPeer *peers.SavedPeer
+		var incomingPeer string
+		conn, err := listener.AcceptTCP()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		ipAddr := conn.LocalAddr().String()
+		if savedPeer = peers.CheckIncomingPeer(ipAddr); savedPeer != nil {
+			incomingPeer = savedPeer.Name
+		}
+		fmt.Printf("request from %s\n", incomingPeer)
+		fmt.Println(savedPeer)
+		if savedPeer != nil {
+			savedPeer = PromtSaveRequest(ipAddr)
+			if savedPeer != nil {
+				continue
+			}
+
+		}
+
+		// respond with handshake if want to connect
+		// save addr locally and named it
+		// start exchange
+	}
+}
+
+func connectToPeer() {
+	ip := userInput()
+	conn, _ := tcp.Connect(ip)
+	fmt.Println(conn)
+}
+
+func PromtSaveRequest(ip string) *peers.SavedPeer {
+	var peer *peers.SavedPeer
+	fmt.Printf("do you want to establish connection with %s?\n type 'y' or 'n'\n", ip)
+	result := userInput()
+	if result == "n" {
+		fmt.Println("aborting connection...")
+		return nil
+	} else if result == "y" {
+		fmt.Println()
+		name := userInput()
+		peer = peers.RegisterPeer(name, ip)
+	}
+	return peer
+}
+
+func userInput() string {
+	var ip string
+	fmt.Print("input: ")
+	fmt.Scan(&ip)
+	return ip
 }

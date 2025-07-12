@@ -34,7 +34,7 @@ type syncPipeChannel struct {
 	addresses []string
 }
 
-var localAddr *net.IPNet = getLocalHostAddress()
+var localAddr *net.IPNet = GetLocalHostAddress()
 
 var icmpMsg *icmp.Message = &icmp.Message{
 	Type: ipv4.ICMPTypeEcho,
@@ -131,7 +131,7 @@ func write(conn *icmp.PacketConn, ip string, msg []byte) *net.IPAddr {
 	return nil
 }
 
-func getLocalHostAddress() *net.IPNet {
+func GetLocalHostAddress() *net.IPNet {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		log.Fatal(err)
@@ -190,6 +190,7 @@ func (pipe *syncPipeChannel) read(conn *icmp.PacketConn) {
 				timesOccured -= 1
 				if timesOccured == 0 {
 					timeoutOccured = true
+					return
 				}
 				timeout.Reset(newDuration())
 			}
