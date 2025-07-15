@@ -2,6 +2,7 @@ package peers
 
 import (
 	"bufio"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -15,6 +16,18 @@ type SavedPeer struct {
 }
 
 func RegisterPeer(ip, name string) *SavedPeer {
+	f, err := os.Open(ipStorageFname)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	wr := bufio.NewWriter(f)
+	n, err := wr.Write([]byte(fmt.Sprintf("%s:%s", ip, name)))
+	if err != nil {
+		log.Println(err)
+		return nil
+	}
+	fmt.Println(n)
 	return &SavedPeer{
 		Name: name,
 		IP:   ip,

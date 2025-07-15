@@ -7,12 +7,23 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
+	"time"
 )
 
 type nodeCommand struct {
 	ip   string
 	conn *net.TCPConn
 }
+
+type ConnQueue struct {
+	queue []*net.TCPConn
+	mu    *sync.Mutex
+}
+
+var (
+	connectInputWait sync.WaitGroup = sync.WaitGroup{}
+)
 
 func Execute() {
 	if len(scaner.HandshakedIPs) == 0 {
@@ -22,11 +33,13 @@ func Execute() {
 	}
 
 	go wait()
-
-	for {
-		fmt.Println("type an ip to connect")
-		connectToPeer()
-	}
+	go func() {
+		for {
+			connectInputWait.Wait()
+			fmt.Println("type an ip to connect")
+			connectToPeer()
+		}
+	}()
 
 }
 
@@ -34,13 +47,8 @@ func initList() []nodeCommand {
 	ips := scaner.Scan()
 	ipArr := make([]nodeCommand, len(ips))
 	for i, ip := range ips {
-		// conn, err := tcp.Connect(ip)
-		// if err != nil {
-		// 	continue
-		// }
 		ipArr[i] = nodeCommand{
 			ip: ip,
-			// conn: conn,
 		}
 	}
 	return ipArr
@@ -61,25 +69,29 @@ func wait() {
 	for {
 		var savedPeer *peers.SavedPeer
 		var incomingPeer string
+		listener.SetDeadline(time.Now().Add(time.Second * 120))
 		conn, err := listener.AcceptTCP()
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		ipAddr := conn.LocalAddr().String()
+		ipAddr := conn.RemoteAddr().String()
 		if savedPeer = peers.CheckIncomingPeer(ipAddr); savedPeer != nil {
 			incomingPeer = savedPeer.Name
+		} else {
+			incomingPeer = ipAddr
 		}
 		fmt.Printf("request from %s\n", incomingPeer)
 		fmt.Println(savedPeer)
-		if savedPeer != nil {
+		if savedPeer == nil {
 			savedPeer = PromtSaveRequest(ipAddr)
-			if savedPeer != nil {
+			if savedPeer == nil {
 				continue
 			}
 
 		}
 
+		connectInputWait.Done()
 		// respond with handshake if want to connect
 		// save addr locally and named it
 		// start exchange
@@ -96,11 +108,12 @@ func PromtSaveRequest(ip string) *peers.SavedPeer {
 	var peer *peers.SavedPeer
 	fmt.Printf("do you want to establish connection with %s?\n type 'y' or 'n'\n", ip)
 	result := userInput()
+	fmt.Println(result)
 	if result == "n" {
 		fmt.Println("aborting connection...")
 		return nil
 	} else if result == "y" {
-		fmt.Println()
+		fmt.Println("input name")
 		name := userInput()
 		peer = peers.RegisterPeer(name, ip)
 	}

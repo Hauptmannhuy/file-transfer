@@ -46,6 +46,6 @@ func Connect(ipStr string) (*net.TCPConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("requesting from %s to %s", laddr.String(), raddr.String())
+	fmt.Printf("requesting from %s to %s\n", laddr.String(), raddr.String())
 	return net.DialTCP("tcp", laddr, raddr)
 }
