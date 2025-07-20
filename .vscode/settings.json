@@ -1,0 +1,9 @@
+{
+    "files.associations": {
+        "memory.h": "c",
+        "raylib.h": "c",
+        "stdlib.h": "c",
+        "stdio.h": "c",
+        "microui.h": "c"
+    }
+}
