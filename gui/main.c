@@ -1,146 +1,105 @@
-#include "microui.h"
-#include "stdio.h"
-#include "memory.h"
-#include "stdlib.h"
+
+#include "microui/src/microui.h"
 #include "raylib.h"
+#include "stdio.h"
+#include "stdlib.h"
 
-int FONT_SIZE = 28;
-mu_Font *DEFAULT_FONT = NULL; 
+#define FONT_HEIGHT 10
+#define FONT_SIZE 10
+#define WINDOW_HEIGHT 600
+#define WINDOW_WIDTH 800
 
-int text_height(mu_Font font){
 
-    // return MeasureText(font, FONT_SIZE);
+int text_width(mu_Font font, const char* str, int len){
+    return MeasureText(TextFormat("%.*s", len, str), FONT_SIZE);
 }
 
-int text_width(mu_Font font,const char *text , int len) {
-    printf("text pointer %p\n", text);
-    printf("font (%p)\n", font);
-    printf("len %d\n", len);
-    // if (text != NULL) {
-    //     printf("text %s\n", *text);
-    // }
-
-    // return MeasureText(text, font);
-}
-
-
-
-
-
-
-
-void process_ui(mu_Context *ctx) {
-    BeginDrawing();
-    if (mu_begin_window(ctx, "Demo Window", mu_rect(40, 40, 300, 450))) {
-            // mu_Container *win = mu_get_current_container(ctx);
-            // win->rect.w = mu_max(win->rect.w, 240);
-            // win->rect.h = mu_max(win->rect.h, 300);
-            
-            /* window info */
-            // if (mu_header(ctx, "Window Info")) {
-            //     mu_Container *win = mu_get_current_container(ctx);
-            //     char buf[64];
-            //     mu_layout_row(ctx, 2, (int[]) { 54, -1 }, 0);
-            //     mu_label(ctx,"Position:");
-            //     sprintf(buf, "%d, %d", win->rect.x, win->rect.y); mu_label(ctx, buf);
-            //     mu_label(ctx, "Size:");
-            //     sprintf(buf, "%d, %d", win->rect.w, win->rect.h); mu_label(ctx, buf);
-            // }
-            mu_label(ctx, "First:");
-            if (mu_button(ctx, "Button1")) {
-                printf("Button1 pressed\n");
-            }
-
-            mu_label(ctx, "Second:");
-            if (mu_button(ctx, "Button2")) {
-                mu_open_popup(ctx, "My Popup");
-            }            
-                mu_end_window(ctx);
-    }
-    EndDrawing();
+int text_height(mu_Font font) {
+    return FONT_HEIGHT;
 }
 
 void init_rendering() {
-    char * window_name = "Demo Window";
-    InitWindow(600, 600, window_name);
-
+    SetTargetFPS(60);
+    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Demo window");
 }
 
-void render_rect(mu_Rect rect, mu_Color color) {
-   Color rgba = {
-        color.r, color.g, color.b, color.a
-    };
-    DrawRectangle(rect.x, rect.y, rect.w, rect.h, rgba);
-}
-
-static void loop(mu_Context *ctx) {
-    
-
-    while (!WindowShouldClose()) {
-        PollInputEvents();
-
-        if (IsKeyDown(KEY_SPACE)) {
-            printf("space is pressed\n");
-        }
-        
-        
-
-
-        mu_begin(ctx);
-        process_ui(ctx);
-        mu_end(ctx);
-
-        mu_Command *cmd = NULL;
-        while (mu_next_command(ctx, &cmd) > 0) {
-            if (cmd->type == MU_COMMAND_TEXT) {
-                printf("MU_COMMAND_TEXT\n");
-                // render_text(cmd->text.font, cmd->text.text, cmd->text.pos.x, cmd->text.pos.y, cmd->text.color);
-              }
-              if (cmd->type == MU_COMMAND_RECT) {
-                printf("MU_COMMAND_RECT\n");
-                render_rect(cmd->rect.rect, cmd->rect.color);
-              }
-              if (cmd->type == MU_COMMAND_ICON) {
-                printf("MU_COMMAND_ICON\n");
-                // render_icon(cmd->icon.id, cmd->icon.rect, cmd->icon.color);
-              }
-              if (cmd->type == MU_COMMAND_CLIP) {
-                printf("MU_COMMAND_CLIP\n");
-                // set_clip_rect(cmd->clip.rect);
-              }
-        }
-
-        // abort();
-    }
-}
-
-void load_font(mu_Context *ctx) {
-    Font loaded_fonts = LoadFont("fonts.ttf");
-    DEFAULT_FONT = malloc(sizeof((mu_Font)&loaded_fonts));
-
-    ctx->style->font = DEFAULT_FONT;
+Color cast_color(mu_Color color){
+   return *(Color*)&color;
 }
 
 
 
-int main(){
+void main(){
     mu_Context *ctx = malloc(sizeof(mu_Context));
     mu_init(ctx);
-    
-    ctx->text_height = text_height;
     ctx->text_width = text_width;
-    load_font(ctx);
+    ctx->text_height = text_height;
     init_rendering();
 
+    while (!WindowShouldClose())
+    {
+        BeginDrawing();
 
-    loop(ctx);
+        
+        if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)){
+             Vector2 position = GetMousePosition();
+            mu_input_mousedown(ctx, position.x, position.y, MU_MOUSE_LEFT);
+        }
+
+        if (IsMouseButtonUp(MOUSE_LEFT_BUTTON)) {
+            Vector2 position = GetMousePosition();
+            mu_input_mouseup(ctx, position.x, position.y, MU_MOUSE_LEFT);
+        }
+
+        mu_begin(ctx);
+        if (mu_begin_window(ctx, "My Window", mu_rect(10, 10, 800, 600))) {
+        mu_layout_row(ctx, 2, (int[]) { 60, -1 }, 0);
+
+        mu_label(ctx, "First:");
+        if (mu_button(ctx, "Button1")) {
+            printf("Button1 pressed\n");
+        }
+
+        mu_label(ctx, "Second:");
+        if (mu_button(ctx, "Button2")) {
+            mu_open_popup(ctx, "My Popup");
+        }
+
+        if (mu_begin_popup(ctx, "My Popup")) {
+            mu_label(ctx, "Hello world!");
+            mu_end_popup(ctx);
+        }
+        mu_end_window(ctx);
+        }
+
+        mu_end(ctx);
+
+        mu_Command *cmd = 0;
+        mu_next_command(ctx, &cmd);
+        while(mu_next_command(ctx, &cmd)){
+             switch (cmd->type) {
+                case MU_COMMAND_RECT:
+                {
+                    DrawRectangle(cmd->rect.rect.x, cmd->rect.rect.y, cmd->rect.rect.w, cmd->rect.rect.h, cast_color(cmd->rect.color));
+                } break;
+                case MU_COMMAND_TEXT:
+                {
+                    // printf("NK_COMMAND_TEXT %s\n", cmd->text.str);
+                    DrawText(cmd->text.str, cmd->text.pos.x, cmd->text.pos.y, FONT_SIZE, cast_color(cmd->text.color));
+                } break;
+                case MU_COMMAND_CLIP:
+                {
+                    printf("NK_COMMAND_CLIP\n");
+                }
+            }
+        
+        }
+       
+        ClearBackground(BLACK);
+        EndDrawing();
+    }
+
 }
-
-
-// void process_ui_logic(mu_Context *ctx) {
-//    mu_begin(ctx);
-//    mu_end(ctx);
-// }
 
 
 
