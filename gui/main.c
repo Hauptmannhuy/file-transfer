@@ -4,6 +4,9 @@
 #include "stdio.h"
 #include "stdlib.h"
 
+#include "memory.h"
+
+
 #define FONT_HEIGHT 10
 #define FONT_SIZE 10
 #define WINDOW_HEIGHT 600
@@ -28,8 +31,13 @@ Color cast_color(mu_Color color){
 }
 
 
-
 void main(){
+    shared_memory *ipc = initialize_shared_memory();
+    if (ipc == NULL) {
+        printf("ERROR: error initializing ipc\n");
+        return;
+    }
+
     mu_Context *ctx = malloc(sizeof(mu_Context));
     mu_init(ctx);
     ctx->text_width = text_width;
@@ -56,7 +64,8 @@ void main(){
         mu_layout_row(ctx, 2, (int[]) { 60, -1 }, 0);
 
         mu_label(ctx, "First:");
-        if (mu_button(ctx, "Button1")) {
+        if (mu_button(ctx, "Request ip adresses")) {
+            send_ipc_command(MEM_GET_IP_ADDRS, ipc);
             printf("Button1 pressed\n");
         }
 

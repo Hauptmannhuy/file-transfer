@@ -1,6 +1,7 @@
-package cmd
+package server
 
 import (
+	"file-transfer/ipc"
 	"file-transfer/peers"
 	scaner "file-transfer/scan"
 	"file-transfer/tcp"
@@ -21,25 +22,21 @@ type ConnQueue struct {
 	mu    *sync.Mutex
 }
 
-var (
-	connectInputWait sync.WaitGroup = sync.WaitGroup{}
-)
+func Start(ipcState *ipc.IPCstate) {
 
-func Execute() {
-	if len(scaner.HandshakedIPs) == 0 {
-		fmt.Println("There is no saved hosts that you can connect to. \n Performing search...")
-		connections := initList()
-		renderList(connections)
-	}
+	// if len(scaner.HandshakedIPs) == 0 {
+	// 	fmt.Println("There is no saved hosts that you can connect to. \n Performing search...")
+	// 	connections := initList()
+	// 	renderList(connections)
+	// }
 
-	go wait()
 	go func() {
 		for {
-			connectInputWait.Wait()
-			fmt.Println("type an ip to connect")
-			connectToPeer()
+			ipc.CheckRequestCommands(ipcState)
 		}
 	}()
+
+	go wait()
 
 }
 
@@ -83,46 +80,20 @@ func wait() {
 		}
 		fmt.Printf("request from %s\n", incomingPeer)
 		fmt.Println(savedPeer)
-		if savedPeer == nil {
-			savedPeer = PromtSaveRequest(ipAddr)
-			if savedPeer == nil {
-				continue
-			}
 
-		}
-
-		connectInputWait.Done()
 		// respond with handshake if want to connect
 		// save addr locally and named it
 		// start exchange
 	}
 }
 
-func connectToPeer() {
-	ip := userInput()
+func connectToPeer(ip string) {
 	conn, _ := tcp.Connect(ip)
 	fmt.Println(conn)
 }
 
 func PromtSaveRequest(ip string) *peers.SavedPeer {
 	var peer *peers.SavedPeer
-	fmt.Printf("do you want to establish connection with %s?\n type 'y' or 'n'\n", ip)
-	result := userInput()
-	fmt.Println(result)
-	if result == "n" {
-		fmt.Println("aborting connection...")
-		return nil
-	} else if result == "y" {
-		fmt.Println("input name")
-		name := userInput()
-		peer = peers.RegisterPeer(name, ip)
-	}
+	peers.RegisterPeer(ip, "test peer")
 	return peer
-}
-
-func userInput() string {
-	var ip string
-	fmt.Print("input: ")
-	fmt.Scan(&ip)
-	return ip
 }
