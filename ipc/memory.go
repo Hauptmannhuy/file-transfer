@@ -1,9 +1,11 @@
 package ipc
 
 import (
+	scaner "file-transfer/scan"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 )
 
@@ -14,29 +16,40 @@ type IPCstate struct {
 }
 
 type CmdHandler struct {
-	Queue chan uint8
+	Queue  chan uint8
+	Buffer []byte
 }
-
-type RawClientCommandMessage struct {
-	Adress uint
-	Status uint8
-}
-
-type ClientCommand uint8
-
-const (
-	RequestLocalAdressesCmd ClientCommand = iota
-)
 
 const filename string = "/mySharedMem"
-const memoryBlockSize = 4096
+const memoryBlockSize = 1024 * 256
+
+type cmdAddr uint8
 
 const (
-	CMD_REQUEST_ADDRESSES_LOC = 20
+	CMD_TYPE_MESSAGE_ADRESS        cmdAddr = 0
+	CMD_RW_STATUS_ADRESS           cmdAddr = 1
+	CMD_MESSAGE_VALUE_ADRESS_START cmdAddr = 2
+	CMD_MESSAGE_VALUE_ADDRESS_END  cmdAddr = 66
 )
 
-var CommandAddresesLocations []int = []int{
-	CMD_REQUEST_ADDRESSES_LOC,
+const (
+	statusRW   int = 2
+	statusIdle int = 0
+)
+
+type ClientCommand struct {
+	cmdEnum clientCmdEnum
+	fn      func(*IPCstate, ...func() error) error
+}
+
+type clientCmdEnum uint8
+
+const (
+	CMD_REQUEST_ADDRESSES clientCmdEnum = iota + 1
+)
+
+var ClientCommands []clientCmdEnum = []clientCmdEnum{
+	CMD_REQUEST_ADDRESSES,
 }
 
 func InitIPC() (*IPCstate, error) {
@@ -54,23 +67,61 @@ func InitIPC() (*IPCstate, error) {
 		AddressSpaceSize: memoryBlockSize,
 		MemoryBlock:      block,
 		CmdHandler: CmdHandler{
-			Queue: make(chan uint8),
+			Queue:  make(chan uint8),
+			Buffer: block,
 		},
 	}, nil
 }
 
-func CheckRequestCommands(ipcState *IPCstate) {
-	for _, addr := range CommandAddresesLocations {
-		val := ipcState.MemoryBlock[addr]
-		if val != 0 {
-			fmt.Println("received client cmd")
+func decode(cmd uint8) clientCmdEnum {
+	switch clientCmdEnum(cmd) {
+	case CMD_REQUEST_ADDRESSES:
+		return CMD_REQUEST_ADDRESSES
+	default:
+		panic("unknown cmd")
+	}
+}
+
+func (ipcState *IPCstate) ProccessQueue() {
+	handler := ipcState.CmdHandler
+	mutex := &sync.Mutex{}
+	for {
+		cmd := <-handler.Queue
+		translatedCmd := decode(cmd)
+		mutex.Lock()
+		ipcState.MemoryBlock[CMD_RW_STATUS_ADRESS] = byte(statusRW)
+		switch translatedCmd {
+		case CMD_REQUEST_ADDRESSES:
+			requestLocalAddresses(ipcState.CmdHandler)
+		}
+		ipcState.MemoryBlock[CMD_TYPE_MESSAGE_ADRESS] = 0
+		ipcState.MemoryBlock[CMD_RW_STATUS_ADRESS] = byte(statusIdle)
+		mutex.Unlock()
+	}
+}
+
+func (ipcState *IPCstate) Listen() {
+	for {
+		cmd := ipcState.MemoryBlock[CMD_TYPE_MESSAGE_ADRESS]
+		if cmd > 0 {
+			ipcState.CmdHandler.Queue <- cmd
 		}
 	}
 }
 
-func ProccessQueue(handler CmdHandler) {
-	for {
-		cmd := <-handler.Queue
+func requestLocalAddresses(handler CmdHandler) {
+	addrs := scaner.Scan()
+	j := int(CMD_MESSAGE_VALUE_ADRESS_START)
+	// k := int(CMD_MESSAGE_VALUE_ADRESS_START)
+	fmt.Println("addrs to send", addrs)
+	for i := 0; i < len(addrs); i++ {
+		message := addrs[i]
+		messageLen := len(message)
 
+		handler.Buffer[j] = byte(messageLen)
+		copy(handler.Buffer[j+1:messageLen+j+1], []byte(message))
+		fmt.Println("copied ", string(handler.Buffer[j+1:messageLen+j+1]))
+		fmt.Println(handler.Buffer[j+1 : messageLen+j+1])
+		j = j + messageLen + 1
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"sync"
-	"time"
 )
 
 type nodeCommand struct {
@@ -32,7 +31,7 @@ func Start(ipcState *ipc.IPCstate) {
 
 	go func() {
 		for {
-			ipc.CheckRequestCommands(ipcState)
+			// ipc.CheckRequestCommands(ipcState)
 		}
 	}()
 
@@ -66,7 +65,6 @@ func wait() {
 	for {
 		var savedPeer *peers.SavedPeer
 		var incomingPeer string
-		listener.SetDeadline(time.Now().Add(time.Second * 120))
 		conn, err := listener.AcceptTCP()
 		if err != nil {
 			log.Fatal(err)

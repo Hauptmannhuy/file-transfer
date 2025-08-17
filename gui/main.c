@@ -6,6 +6,8 @@
 
 #include "memory.h"
 
+#include "commands.h"
+
 
 #define FONT_HEIGHT 10
 #define FONT_SIZE 10
@@ -30,6 +32,22 @@ Color cast_color(mu_Color color){
    return *(Color*)&color;
 }
 
+void print_server_response(void *arg) {
+    char *memory = (char*)arg;
+    int offset = CMD_MESSAGE_VALUE_ADRESS_START;
+    int message_length = memory[offset];
+    printf("start %d\n",message_length);
+    while (message_length > 0)
+    {
+        char buffer[message_length+1];
+        memcpy(buffer, memory+offset+1, message_length);
+        buffer[message_length] = '\0';
+        printf("copied %d, %s\n", message_length, buffer);
+        offset += message_length;
+        message_length = buffer[offset];
+    }
+}
+
 
 void main(){
     shared_memory *ipc = initialize_shared_memory();
@@ -48,7 +66,6 @@ void main(){
     {
         BeginDrawing();
 
-        
         if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)){
              Vector2 position = GetMousePosition();
             mu_input_mousedown(ctx, position.x, position.y, MU_MOUSE_LEFT);
@@ -59,6 +76,13 @@ void main(){
             mu_input_mouseup(ctx, position.x, position.y, MU_MOUSE_LEFT);
         }
 
+        if (IsKeyPressed(KEY_F1)) {
+            int res = shm_unlink(FILE_NAME);
+            printf("INFO MEMORY: unlink result:%d\n", res);
+            fflush(stdout);
+            abort();
+        }
+
         mu_begin(ctx);
         if (mu_begin_window(ctx, "My Window", mu_rect(10, 10, 800, 600))) {
         mu_layout_row(ctx, 2, (int[]) { 60, -1 }, 0);
@@ -67,6 +91,7 @@ void main(){
         if (mu_button(ctx, "Request ip adresses")) {
             send_ipc_command(MEM_GET_IP_ADDRS, ipc);
             printf("Button1 pressed\n");
+            new_worker(print_server_response, ipc, MEM_GET_IP_ADDRS);
         }
 
         mu_label(ctx, "Second:");
@@ -107,7 +132,6 @@ void main(){
         ClearBackground(BLACK);
         EndDrawing();
     }
-
 }
 
 

@@ -17,14 +17,16 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("HEEEY")
+	go ipcState.Listen()
+	go ipcState.ProccessQueue()
 	go func() {
 		for {
-			fmt.Println(ipcState.MemoryBlock)
+			fmt.Println(ipcState.MemoryBlock[:66])
 			time.Sleep(time.Second * 10)
 		}
 	}()
 	server.Start(ipcState)
 	signal.Notify(exitSignal, syscall.SIGTERM)
 	<-exitSignal
+	fmt.Println("exiting")
 }
