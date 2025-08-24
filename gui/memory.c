@@ -1,6 +1,23 @@
 #include "memory.h"
 
 
+void copy_to_buff(char *memory, char *buffer) {
+    int offset = CMD_MESSAGE_VALUE_ADRESS_START;
+    int message_length = memory[offset];
+    int buffer_offset = 0;
+
+    while (message_length > 0)
+    {
+        memcpy(buffer + buffer_offset, memory + offset + 1, message_length);
+        buffer[buffer_offset + message_length] = '\n';
+        offset += message_length+1;
+        buffer_offset += message_length;
+        message_length = memory[offset];
+    }
+    buffer[buffer_offset+message_length] = '\0';
+    printf("buffer: %s\n", buffer);
+}
+
 
 
 shared_memory* initialize_shared_memory(){
@@ -49,6 +66,12 @@ shared_memory* initialize_shared_memory(){
 void send_ipc_command(int cmd, shared_memory *ipcState) {
     ipcState->memory_block[CMD_TYPE_MESSAGE_ADRESS] = cmd;
 }
+
+int check_rw_status(char *memory) {
+    if (memory[CMD_STATUS_ADRESS] == READY_RDWR || memory[CMD_STATUS_ADRESS] == STATUS_IDLE) return 0;
+    if (memory[CMD_STATUS_ADRESS] == ACTIVE_RDWR) return -1;
+}
+
 
 void initialize_shared_memory_state(void *addr_ptr) {
     

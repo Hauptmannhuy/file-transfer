@@ -89,12 +89,12 @@ func (ipcState *IPCstate) ProccessQueue() {
 		cmd := <-handler.Queue
 		translatedCmd := decode(cmd)
 		mutex.Lock()
+		ipcState.MemoryBlock[CMD_TYPE_MESSAGE_ADRESS] = 0
 		ipcState.MemoryBlock[CMD_RW_STATUS_ADRESS] = byte(statusRW)
 		switch translatedCmd {
 		case CMD_REQUEST_ADDRESSES:
 			requestLocalAddresses(ipcState.CmdHandler)
 		}
-		ipcState.MemoryBlock[CMD_TYPE_MESSAGE_ADRESS] = 0
 		ipcState.MemoryBlock[CMD_RW_STATUS_ADRESS] = byte(statusIdle)
 		mutex.Unlock()
 	}
@@ -110,17 +110,17 @@ func (ipcState *IPCstate) Listen() {
 }
 
 func requestLocalAddresses(handler CmdHandler) {
+	fmt.Println("enter")
 	addrs := scaner.Scan()
 	j := int(CMD_MESSAGE_VALUE_ADRESS_START)
 	// k := int(CMD_MESSAGE_VALUE_ADRESS_START)
-	fmt.Println("addrs to send", addrs)
 	for i := 0; i < len(addrs); i++ {
 		message := addrs[i]
 		messageLen := len(message)
-
+		fmt.Println("message len", messageLen)
 		handler.Buffer[j] = byte(messageLen)
 		copy(handler.Buffer[j+1:messageLen+j+1], []byte(message))
-		fmt.Println("copied ", string(handler.Buffer[j+1:messageLen+j+1]))
+		// fmt.Println("copied ", string(handler.Buffer[j+1:messageLen+j+1]))
 		fmt.Println(handler.Buffer[j+1 : messageLen+j+1])
 		j = j + messageLen + 1
 	}

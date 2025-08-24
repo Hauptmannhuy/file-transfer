@@ -91,22 +91,22 @@ func pingLocalNetwork() []string {
 		panic(err)
 	}
 
-	syncPipleChan := newSyncPipeChan()
-	go syncPipleChan.processAddresses()
-	go syncPipleChan.read(icmpListen)
+	syncPipeChan := newSyncPipeChan()
+	go syncPipeChan.processAddresses()
+	go syncPipeChan.read(icmpListen)
 	for i := ipStartByte; i <= ipEndByte; i++ {
 		ip := "192.168.1." + strconv.Itoa(i)
 		go write(icmpListen, ip, bytes)
 	}
-	syncPipleChan.sync.Wait()
+	syncPipeChan.sync.Wait()
 	err = icmpListen.Close()
 	if err != nil {
 		log.Fatal(err)
 	}
 	// fmt.Println("closing")
-	syncPipleChan.close <- struct{}{}
-	log.Println("result addresses ", syncPipleChan.addresses)
-	return syncPipleChan.addresses
+	syncPipeChan.close <- struct{}{}
+	log.Println("result addresses ", syncPipeChan.addresses)
+	return syncPipeChan.addresses
 }
 
 func write(conn *icmp.PacketConn, ip string, msg []byte) *net.IPAddr {
@@ -206,6 +206,7 @@ func (pipe *syncPipeChannel) read(conn *icmp.PacketConn) {
 		err := conn.SetReadDeadline(time.Now().Add(time.Millisecond * 300))
 		if err != nil {
 			// log.Println(err)
+			continue
 		}
 		n, peer, err := conn.ReadFrom(buffer)
 		if err != nil {

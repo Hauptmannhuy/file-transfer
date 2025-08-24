@@ -44,7 +44,9 @@ enum status {
     ACTIVE_RDWR,
 };
 
-
+void copy_to_buff(char *memory, char *buffer);
+int check_rw_status(char *memory);
 
 void send_ipc_command(int cmd, shared_memory *ipcState);
+
 shared_memory* initialize_shared_memory();
