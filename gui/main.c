@@ -4,9 +4,7 @@
 #include "stdio.h"
 #include "stdlib.h"
 
-#include "memory.h"
-
-#include "ipc_executor.h"
+#include "ipc.h"
 
 
 #define FONT_HEIGHT 10
@@ -39,7 +37,7 @@ Color cast_color(mu_Color color){
 
 
 void main(){
-    shared_memory *ipc = initialize_shared_memory();
+    ipc_state_t *ipc = initialize_shared_memory();
     if (ipc == NULL) {
         printf("ERROR: error initializing ipc\n");
         return;
@@ -57,6 +55,7 @@ void main(){
 
     while (!WindowShouldClose())
     {
+        // printf("%d \n", ipc->front_cb->read_offset);
         BeginDrawing();
 
         if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
@@ -88,9 +87,9 @@ void main(){
 
         mu_label(ctx, "First:");
         if (mu_button(ctx, "Request ip adresses")) {
-            send_ipc_command(MEM_GET_IP_ADDRS, ipc);
+            command_message cmd = {.command_type = MEM_GET_IP_ADDRS, .payload_size = 0};
+            send_ipc_command(cmd, ipc);
             printf("Button1 pressed\n");
-            new_worker(MEM_GET_IP_ADDRS, ipc, ip_addrs_buffer);
         }
 
         mu_label(ctx, "Second:");

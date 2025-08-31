@@ -7,12 +7,22 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"unsafe"
 )
 
 type IPCstate struct {
 	AddressSpaceSize int
 	MemoryBlock      []byte
 	CmdHandler       CmdHandler
+	frontBlock       controlBlock
+	backBlock        controlBlock
+}
+
+type controlBlock struct {
+	memory      []byte
+	writeOffset uint32
+	readOffset  uint32
+	rdwrStatus  uint8
 }
 
 type CmdHandler struct {
@@ -20,8 +30,19 @@ type CmdHandler struct {
 	Buffer []byte
 }
 
-const filename string = "/mySharedMem"
-const memoryBlockSize = 1024 * 256
+const (
+	filename        string = "/mySharedMem"
+	memoryBlockSize        = 1024 * 256
+	bblockAddrStart        = memoryBlockSize / 2
+	fblockAddrStart        = 0
+)
+
+const sizeOfUint32 = 4
+
+const (
+	indexWriteOffset = 4
+	indexReadOffset  = 0
+)
 
 type cmdAddr uint8
 
@@ -40,6 +61,11 @@ const (
 type ClientCommand struct {
 	cmdEnum clientCmdEnum
 	fn      func(*IPCstate, ...func() error) error
+}
+
+type cmdMessage struct {
+	cmdType        uint32
+	cmdPayloadSize uint32
 }
 
 type clientCmdEnum uint8
@@ -63,6 +89,14 @@ func InitIPC() (*IPCstate, error) {
 		return nil, fmt.Errorf("err mapping addr space: %v", err)
 	}
 
+	fblockControl := controlBlock{
+		memory: block[fblockAddrStart:bblockAddrStart],
+	}
+
+	bblockControl := controlBlock{
+		memory: block[bblockAddrStart:],
+	}
+
 	return &IPCstate{
 		AddressSpaceSize: memoryBlockSize,
 		MemoryBlock:      block,
@@ -70,6 +104,8 @@ func InitIPC() (*IPCstate, error) {
 			Queue:  make(chan uint8),
 			Buffer: block,
 		},
+		frontBlock: fblockControl,
+		backBlock:  bblockControl,
 	}, nil
 }
 
@@ -100,28 +136,71 @@ func (ipcState *IPCstate) ProccessQueue() {
 	}
 }
 
+// TODO: think about how to actually use read and write offsets in communication protocol
 func (ipcState *IPCstate) Listen() {
 	for {
-		cmd := ipcState.MemoryBlock[CMD_TYPE_MESSAGE_ADRESS]
-		if cmd > 0 {
-			ipcState.CmdHandler.Queue <- cmd
+		offset := GetWriteOffset(ipcState.backBlock.memory)
+		msg, err := DecodeCommandMsg(ipcState.backBlock.memory, offset)
+		if err != nil {
+			os.Exit(1)
 		}
+		if msg == nil {
+			continue
+		}
+		updateSize := msg.cmdPayloadSize + uint32(unsafe.Sizeof(msg.cmdType))
+		UpdateWriteOffset(ipcState.backBlock.memory, updateSize)
+		ClearQueue(ipcState.backBlock.memory, offset, offset+updateSize)
+	}
+}
+
+func DecodeCommandMsg(memory []byte, offset uint32) (*cmdMessage, error) {
+	commandType := ReadFourBytes(memory, offset)
+	commandSize := ReadFourBytes(memory, offset+sizeOfUint32)
+
+	if (commandType | commandSize) == 0 {
+		return nil, nil
+	}
+	if commandType == 0 && commandSize > 0 {
+		return nil, fmt.Errorf("invalid message: size=%d but type=0", commandSize)
+	}
+	return &cmdMessage{
+		cmdType:        commandType,
+		cmdPayloadSize: commandSize,
+	}, nil
+}
+
+func ReadFourBytes(memory []byte, offset uint32) uint32 {
+	return *(*uint32)(unsafe.Pointer(&memory[offset]))
+}
+
+func GetReadOffset(memory []byte) uint32 {
+	return ReadFourBytes(memory, indexReadOffset)
+}
+
+func GetWriteOffset(memory []byte) uint32 {
+	return ReadFourBytes(memory, indexWriteOffset)
+}
+
+func UpdateWriteOffset(memory []byte, size uint32) {
+	p := (*uint32)(unsafe.Pointer(&memory[indexWriteOffset]))
+	*p = *p + size
+}
+
+func ClearQueue(memory []byte, offsetStart, offsetEnd uint32) {
+	fmt.Println(offsetStart, offsetEnd)
+	for i := offsetStart; i < offsetEnd; i++ {
+		memory[i] = 0
 	}
 }
 
 func requestLocalAddresses(handler CmdHandler) {
-	fmt.Println("enter")
 	addrs := scaner.Scan()
 	j := int(CMD_MESSAGE_VALUE_ADRESS_START)
-	// k := int(CMD_MESSAGE_VALUE_ADRESS_START)
 	for i := 0; i < len(addrs); i++ {
 		message := addrs[i]
 		messageLen := len(message)
-		fmt.Println("message len", messageLen)
 		handler.Buffer[j] = byte(messageLen)
 		copy(handler.Buffer[j+1:messageLen+j+1], []byte(message))
-		// fmt.Println("copied ", string(handler.Buffer[j+1:messageLen+j+1]))
-		fmt.Println(handler.Buffer[j+1 : messageLen+j+1])
 		j = j + messageLen + 1
 	}
 }

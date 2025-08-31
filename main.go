@@ -17,7 +17,7 @@ func main() {
 		panic(err)
 	}
 	go ipcState.Listen()
-	go ipcState.ProccessQueue()
+	// go ipcState.ProccessQueue()
 	// go func() {
 	// 	for {
 	// 		fmt.Println(ipcState.MemoryBlock[:66])
