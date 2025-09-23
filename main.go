@@ -17,13 +17,7 @@ func main() {
 		panic(err)
 	}
 	go ipcState.Listen()
-	// go ipcState.ProccessQueue()
-	// go func() {
-	// 	for {
-	// 		fmt.Println(ipcState.MemoryBlock[:66])
-	// 		time.Sleep(time.Second * 10)
-	// 	}
-	// }()
+	go ipcState.ProccessQueue()
 	server.Start(ipcState)
 	signal.Notify(exitSignal, syscall.SIGTERM)
 	<-exitSignal

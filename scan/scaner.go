@@ -14,7 +14,7 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
-var nHandshakedIPs []string
+var HandshakedIPs []string
 
 const (
 	ipAdressStart = "192.168.1.100"
@@ -22,7 +22,7 @@ const (
 )
 
 const (
-	defaultIcmpConf = "ip4:icmp"
+	defaultIcmpConf = "ip:icmp"
 )
 
 type syncPipeChannel struct {
@@ -45,7 +45,8 @@ var icmpMsg *icmp.Message = &icmp.Message{
 	},
 }
 
-func Scan() []string {
+// returns list of ip separated by comma
+func Scan() string {
 	return pingLocalNetwork()
 }
 
@@ -55,11 +56,12 @@ func getLastIpByte(ip string) string {
 }
 
 func ping(ip string) {
+	var bytes []byte
 	icmpConn, err := icmp.ListenPacket(defaultIcmpConf, localAddr.IP.String())
 	if err != nil {
 		panic(err)
 	}
-	var bytes []byte
+
 	bytes, err = icmpMsg.Marshal(bytes)
 	if err != nil {
 		panic(err)
@@ -69,11 +71,15 @@ func ping(ip string) {
 
 }
 
-func pingLocalNetwork() []string {
+func pingLocalNetwork() string {
+	var bytes []byte
+	syncPipeChan := newSyncPipeChan()
+
 	ipStartByte, err := strconv.Atoi(getLastIpByte(ipAdressStart))
 	if err != nil {
 		panic(err)
 	}
+
 	ipEndByte, err := strconv.Atoi(getLastIpByte(ipAdressEnd))
 	if err != nil {
 		panic(err)
@@ -85,13 +91,11 @@ func pingLocalNetwork() []string {
 	}
 	defer icmpListen.Close()
 
-	var bytes []byte
 	bytes, err = icmpMsg.Marshal(bytes)
 	if err != nil {
 		panic(err)
 	}
 
-	syncPipeChan := newSyncPipeChan()
 	go syncPipeChan.processAddresses()
 	go syncPipeChan.read(icmpListen)
 	for i := ipStartByte; i <= ipEndByte; i++ {
@@ -106,7 +110,7 @@ func pingLocalNetwork() []string {
 	// fmt.Println("closing")
 	syncPipeChan.close <- struct{}{}
 	log.Println("result addresses ", syncPipeChan.addresses)
-	return syncPipeChan.addresses
+	return strings.Join(syncPipeChan.addresses, ",")
 }
 
 func write(conn *icmp.PacketConn, ip string, msg []byte) *net.IPAddr {
@@ -117,7 +121,6 @@ func write(conn *icmp.PacketConn, ip string, msg []byte) *net.IPAddr {
 	}
 
 	for i := 0; i < 3; i++ {
-
 		conn.SetWriteDeadline(time.Now().Add(time.Millisecond * 200))
 		_, err := conn.WriteTo(msg, raddr)
 		if err != nil {

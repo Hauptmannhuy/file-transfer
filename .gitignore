@@ -1,5 +1,6 @@
 /.vscode
 main
+debug
 ips
-out
+/gui/out
 /gui/microui

@@ -3,7 +3,6 @@ package server
 import (
 	"file-transfer/ipc"
 	"file-transfer/peers"
-	scaner "file-transfer/scan"
 	"file-transfer/tcp"
 	"fmt"
 	"log"
@@ -29,25 +28,8 @@ func Start(ipcState *ipc.IPCstate) {
 	// 	renderList(connections)
 	// }
 
-	go func() {
-		for {
-			// ipc.CheckRequestCommands(ipcState)
-		}
-	}()
-
 	go wait()
 
-}
-
-func initList() []nodeCommand {
-	ips := scaner.Scan()
-	ipArr := make([]nodeCommand, len(ips))
-	for i, ip := range ips {
-		ipArr[i] = nodeCommand{
-			ip: ip,
-		}
-	}
-	return ipArr
 }
 
 func renderList(ipArray []nodeCommand) {

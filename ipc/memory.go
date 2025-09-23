@@ -1,8 +1,10 @@
 package ipc
 
 import (
+	"encoding/binary"
 	scaner "file-transfer/scan"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -26,7 +28,7 @@ type controlBlock struct {
 }
 
 type CmdHandler struct {
-	Queue  chan uint8
+	Queue  chan cmdMessage
 	Buffer []byte
 }
 
@@ -101,7 +103,7 @@ func InitIPC() (*IPCstate, error) {
 		AddressSpaceSize: memoryBlockSize,
 		MemoryBlock:      block,
 		CmdHandler: CmdHandler{
-			Queue:  make(chan uint8),
+			Queue:  make(chan cmdMessage),
 			Buffer: block,
 		},
 		frontBlock: fblockControl,
@@ -109,28 +111,33 @@ func InitIPC() (*IPCstate, error) {
 	}, nil
 }
 
-func decode(cmd uint8) clientCmdEnum {
-	switch clientCmdEnum(cmd) {
-	case CMD_REQUEST_ADDRESSES:
-		return CMD_REQUEST_ADDRESSES
-	default:
-		panic("unknown cmd")
-	}
-}
-
 func (ipcState *IPCstate) ProccessQueue() {
 	handler := ipcState.CmdHandler
 	mutex := &sync.Mutex{}
 	for {
 		cmd := <-handler.Queue
-		translatedCmd := decode(cmd)
 		mutex.Lock()
-		ipcState.MemoryBlock[CMD_TYPE_MESSAGE_ADRESS] = 0
-		ipcState.MemoryBlock[CMD_RW_STATUS_ADRESS] = byte(statusRW)
-		switch translatedCmd {
-		case CMD_REQUEST_ADDRESSES:
-			requestLocalAddresses(ipcState.CmdHandler)
+		var data any
+		var buffer []byte
+		var length int
+		switch uint32(cmd.cmdType) {
+		case uint32(CMD_REQUEST_ADDRESSES):
+			data = scaner.Scan()
 		}
+
+		switch d := data.(type) {
+		case string:
+			length = len((d))
+			data = []byte(d)
+		}
+
+		buffer = make([]byte, length)
+		_, err := binary.Encode(buffer, binary.NativeEndian, data)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		ipcState.sendMessage(cmd.cmdType, buffer)
 		ipcState.MemoryBlock[CMD_RW_STATUS_ADRESS] = byte(statusIdle)
 		mutex.Unlock()
 	}
@@ -142,14 +149,16 @@ func (ipcState *IPCstate) Listen() {
 		offset := GetWriteOffset(ipcState.backBlock.memory)
 		msg, err := DecodeCommandMsg(ipcState.backBlock.memory, offset)
 		if err != nil {
-			os.Exit(1)
+			log.Fatal(err.Error())
 		}
 		if msg == nil {
 			continue
 		}
+		fmt.Println("decoded message type", msg.cmdType)
 		updateSize := msg.cmdPayloadSize + uint32(unsafe.Sizeof(msg.cmdType))
 		UpdateWriteOffset(ipcState.backBlock.memory, updateSize)
 		ClearQueue(ipcState.backBlock.memory, offset, offset+updateSize)
+		ipcState.CmdHandler.Queue <- *msg
 	}
 }
 
@@ -193,14 +202,12 @@ func ClearQueue(memory []byte, offsetStart, offsetEnd uint32) {
 	}
 }
 
-func requestLocalAddresses(handler CmdHandler) {
-	addrs := scaner.Scan()
-	j := int(CMD_MESSAGE_VALUE_ADRESS_START)
-	for i := 0; i < len(addrs); i++ {
-		message := addrs[i]
-		messageLen := len(message)
-		handler.Buffer[j] = byte(messageLen)
-		copy(handler.Buffer[j+1:messageLen+j+1], []byte(message))
-		j = j + messageLen + 1
-	}
+func (ipcState *IPCstate) sendMessage(msgType uint32, data []byte) {
+	offset := GetWriteOffset(ipcState.frontBlock.memory)
+	handler := ipcState.CmdHandler
+
+	j := int(offset)
+	binary.NativeEndian.PutUint32(handler.Buffer[j:], msgType)
+	binary.NativeEndian.PutUint32(handler.Buffer[j+4:], uint32(len(data)))
+	copy(handler.Buffer[j+8:], data)
 }

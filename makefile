@@ -1,7 +1,6 @@
-run_app:
+compile:
 	go build main.go
-	# sudo setcap cap_net_raw+ep ./main
-	./main
+	sudo setcap cap_net_raw+ep ./main
 
 compile_debug:
 	go build -gcflags "all=-N -l" -o debug main.go
