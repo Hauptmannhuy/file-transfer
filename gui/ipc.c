@@ -82,9 +82,9 @@ void proccess_message_queue(data_context_t *data_context,
                             thread_pool_t *tpool) {
   for (int i = message_queue->head; i < message_queue->tail; i++) {
     command_message cmd = message_queue->buffer[i];
-    char *buffer = malloc(sizeof(char) * cmd.payload_size);
-    memcpy(buffer, cmd.payload, cmd.payload_size + 1);
-    buffer[cmd.payload_size + 1] = '\0';
+    char *buffer = malloc(sizeof(char) * cmd.payload_size + 1);
+    memcpy(buffer, cmd.payload, cmd.payload_size);
+    buffer[cmd.payload_size] = '\0';
     command_handler_t *handler =
         get_command_handler(data_context, cmd.command_type, buffer);
     tpool_add_work(tpool, handler->func, handler);
@@ -121,7 +121,7 @@ void listen(void *ipc_state_arg) {
     }
     uint32_t message_payload_size = *(uint32_t *)(start_ptr + uint32_size);
     char *ptr_to_payload = start_ptr + (uint32_size * 2);
-
+    ptr_to_payload[message_payload_size] = '\0';
     cmd.command_type = message_type;
     cmd.payload_size = message_payload_size;
     cmd.payload = ptr_to_payload;
@@ -213,21 +213,39 @@ ipc_state_t *initialize_shared_memory() {
 void proccess_ip_addrs(void *command_handler_arg) {
   command_handler_t *command_handler = command_handler_arg;
   data_context_t *data_context = command_handler->data_context_t;
+  int result = reallocate_addr_buffer(data_context);
+  if (result == -1) {
+    u_logger_error("error reallocating buffer");
+    abort();
+  }
   u_logger_info("buffer from received command %s", command_handler->buffer);
   int addr_count = 0;
   const char *delimiter = ",";
   char *str = strtok(command_handler->buffer, delimiter);
   while (str != NULL) {
-    data_context->addrs_buffer[addr_count] = malloc(sizeof(char) * strlen(str));
-    strcpy(data_context->addrs_buffer[addr_count], str);
+    ip_addr addr = malloc(sizeof(char) * strlen(str) + 1);
+
+    if (addr == NULL) {
+      u_logger_error("error malloc on addr");
+    }
+
+    u_logger_info("length of addr %d\n", strlen(str));
+    strcpy(addr, str);
+
     str = strtok(NULL, delimiter);
-    // if (result == NULL) {
-    //   u_logger_error("error malloc");
-    //   abort();
-    // }
     addr_count++;
+    if (addr_count >= data_context->addr_capacity) {
+      u_logger_info("addrs exceeds maximum capacity, returning...");
+      goto cleanup;
+    }
+
+    data_context->addrs_buffer[addr_count] = addr;
+    u_logger_info("copied to addr buffer: %s\n",
+                  data_context->addrs_buffer[addr_count]);
   }
 
+  u_logger_info("cleaning up...");
+cleanup:
   free(command_handler->buffer);
   free(command_handler);
 }

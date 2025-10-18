@@ -24,6 +24,8 @@ void init_rendering() {
   InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Demo window");
 }
 
+void render_addresses(data_context_t *data_context, mu_Context *ctx) {}
+
 Color cast_color(mu_Color color) { return *(Color *)&color; }
 
 void main() {

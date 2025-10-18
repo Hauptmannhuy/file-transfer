@@ -205,7 +205,6 @@ func ClearQueue(memory []byte, offsetStart, offsetEnd uint32) {
 func (ipcState *IPCstate) sendMessage(msgType uint32, data []byte) {
 	offset := GetWriteOffset(ipcState.frontBlock.memory)
 	handler := ipcState.CmdHandler
-
 	j := int(offset)
 	binary.NativeEndian.PutUint32(handler.Buffer[j:], msgType)
 	binary.NativeEndian.PutUint32(handler.Buffer[j+4:], uint32(len(data)))

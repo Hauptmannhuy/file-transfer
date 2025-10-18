@@ -21,7 +21,8 @@
                 "-lrt",
                 "-lX11",
                 "-o",
-                "${fileDirname}/${fileBasenameNoExtension}"
+                "${fileDirname}/${fileBasenameNoExtension}",
+                "-fsanitize=address",
             ],
             "options": {
                 "cwd": "${fileDirname}"
