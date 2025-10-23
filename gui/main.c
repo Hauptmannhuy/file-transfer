@@ -24,7 +24,20 @@ void init_rendering() {
   InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Demo window");
 }
 
-void render_addresses(data_context_t *data_context, mu_Context *ctx) {}
+void render_addresses(data_context_t *data_context, mu_Context *ctx) {
+  for (int i = 0; i < data_context->addr_count; i++)
+  {
+    ip_addr addr = data_context->addrs_buffer[i];
+    if (addr == NULL) {
+      u_logger_error("detected null addr in data_context addrs buffer");
+      continue;
+    }
+    u_logger_info("rendering address %s", addr);
+    if (mu_button(ctx, addr)) {
+        mu_open_popup(ctx, "hello from addr");
+      }
+  }
+}
 
 Color cast_color(mu_Color color) { return *(Color *)&color; }
 
@@ -51,6 +64,7 @@ void main() {
     proccess_message_queue(data_context, ipc->message_queue, tpool);
 
     BeginDrawing();
+
 
     if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
       is_left_mouse_down = false;
@@ -95,6 +109,9 @@ void main() {
         mu_label(ctx, "Hello world!");
         mu_end_popup(ctx);
       }
+
+      render_addresses(data_context, ctx);
+
       mu_end_window(ctx);
     }
 

@@ -244,10 +244,11 @@ void proccess_ip_addrs(void *command_handler_arg) {
                   data_context->addrs_buffer[addr_count]);
   }
 
+  cleanup:
   u_logger_info("cleaning up...");
-cleanup:
   free(command_handler->buffer);
   free(command_handler);
+  data_context->addr_count = addr_count;
 }
 
 command_handler_t *get_command_handler(data_context_t *data_context,
