@@ -224,7 +224,7 @@ void proccess_ip_addrs(void *command_handler_arg) {
   char *str = strtok(command_handler->buffer, delimiter);
   while (str != NULL) {
     ip_addr addr = malloc(sizeof(char) * strlen(str) + 1);
-
+    addr[strlen(str)] = '\0';
     if (addr == NULL) {
       u_logger_error("error malloc on addr");
     }
@@ -233,18 +233,18 @@ void proccess_ip_addrs(void *command_handler_arg) {
     strcpy(addr, str);
 
     str = strtok(NULL, delimiter);
+    data_context->addrs_buffer[addr_count] = addr;
+
+    u_logger_info("copied to addr buffer: %s\n",
+                  data_context->addrs_buffer[addr_count]);
     addr_count++;
     if (addr_count >= data_context->addr_capacity) {
       u_logger_info("addrs exceeds maximum capacity, returning...");
       goto cleanup;
     }
-
-    data_context->addrs_buffer[addr_count] = addr;
-    u_logger_info("copied to addr buffer: %s\n",
-                  data_context->addrs_buffer[addr_count]);
   }
 
-  cleanup:
+cleanup:
   u_logger_info("cleaning up...");
   free(command_handler->buffer);
   free(command_handler);

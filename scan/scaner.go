@@ -1,6 +1,7 @@
 package scaner
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -96,6 +97,7 @@ func pingLocalNetwork() string {
 		panic(err)
 	}
 
+	syncPipeChan.sync.Add(1)
 	go syncPipeChan.processAddresses()
 	go syncPipeChan.read(icmpListen)
 	for i := ipStartByte; i <= ipEndByte; i++ {
@@ -174,41 +176,34 @@ func (pipe *syncPipeChannel) processAddresses() {
 }
 
 func newDuration() time.Duration {
-	return time.Until(time.Now().Add(1000 * time.Millisecond))
+	return time.Until(time.Now().Add(800 * time.Millisecond))
 }
 
 func (pipe *syncPipeChannel) read(conn *icmp.PacketConn) {
 	var buffer []byte = make([]byte, 1024)
 	timeout := time.NewTimer(newDuration())
-	var timeoutOccured bool
 	timesOccured := 3
-	pipe.sync.Add(1)
 
 	go func() {
-		for {
-			select {
-			case <-timeout.C:
-				// fmt.Println("times left ", timesOccured)
-				timesOccured -= 1
-				if timesOccured == 0 {
-					timeoutOccured = true
-					return
-				}
-				timeout.Reset(newDuration())
+		for range timeout.C {
+			fmt.Println("TICK DETECTED, times left ", timesOccured)
+			timesOccured -= 1
+			if timesOccured == 0 {
+				return
 			}
+			timeout.Reset(newDuration())
 		}
 	}()
 
 	for {
-		if timeoutOccured {
-			// fmt.Println("TIMEOUT")
+		if timesOccured == 0 {
+			fmt.Println("TIMEOUT")
 			pipe.sync.Done()
 			return
 		}
 
 		err := conn.SetReadDeadline(time.Now().Add(time.Millisecond * 300))
 		if err != nil {
-			// log.Println(err)
 			continue
 		}
 		n, peer, err := conn.ReadFrom(buffer)
@@ -227,7 +222,6 @@ func (pipe *syncPipeChannel) read(conn *icmp.PacketConn) {
 			switch reply.Type {
 			case ipv4.ICMPTypeEchoReply:
 				if peer != nil {
-					// fmt.Printf("Repliled to icmp from %s\n", peer.String())
 					timeout.Reset(newDuration())
 					pipe.addrChan <- peer.String()
 					if timesOccured < 3 {
