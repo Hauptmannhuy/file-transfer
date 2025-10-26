@@ -25,17 +25,11 @@ void init_rendering() {
 }
 
 void render_addresses(data_context_t *data_context, mu_Context *ctx) {
-  for (int i = 0; i < data_context->addr_count; i++)
-  {
+  for (int i = 0; i < data_context->addr_count; i++) {
     ip_addr addr = data_context->addrs_buffer[i];
-    if (addr == NULL) {
-      u_logger_error("detected null addr in data_context addrs buffer");
-      continue;
-    }
-    u_logger_info("rendering address %s", addr);
     if (mu_button(ctx, addr)) {
-        mu_open_popup(ctx, "hello from addr");
-      }
+      mu_open_popup(ctx, "hello from addr");
+    }
   }
 }
 
@@ -55,6 +49,7 @@ void main() {
   ctx->text_height = text_height;
   init_rendering();
   thread_pool_t *tpool = create_tpool(4);
+
   start_listener(ipc, tpool);
   char *ip_addrs_buffer = malloc(256);
 
@@ -64,7 +59,6 @@ void main() {
     proccess_message_queue(data_context, ipc->message_queue, tpool);
 
     BeginDrawing();
-
 
     if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
       is_left_mouse_down = false;
