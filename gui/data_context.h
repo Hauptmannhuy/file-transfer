@@ -4,6 +4,7 @@ typedef char *ip_addr;
 
 typedef struct data_context_t {
   ip_addr *addrs_buffer;
+  ip_addr host_addr;
   int addr_capacity;
   int addr_count;
 } data_context_t;

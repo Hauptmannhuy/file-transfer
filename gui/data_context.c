@@ -8,6 +8,7 @@ data_context_t *data_context_init() {
   context->addr_capacity = INITIAL_ADDRS_CAPACITY;
   context->addr_count = 0;
   context->addrs_buffer = calloc(INITIAL_ADDRS_CAPACITY, sizeof(ip_addr));
+  context->host_addr = NULL;
   return context;
 }
 
@@ -17,7 +18,7 @@ int reallocate_addr_buffer(data_context_t *data_context) {
     return -1;
   }
 
-  for (int i = 0; i < INITIAL_ADDRS_CAPACITY; i++) {
+  for (int i = 0; i < data_context->addr_capacity; i++) {
     free(data_context->addrs_buffer[i]);
   }
 
@@ -25,7 +26,7 @@ int reallocate_addr_buffer(data_context_t *data_context) {
     free(data_context->addrs_buffer);
   }
 
-  void *buffer_ptr = calloc(INITIAL_ADDRS_CAPACITY, sizeof(ip_addr));
+  void *buffer_ptr = calloc(data_context->addr_capacity, sizeof(ip_addr));
   if (buffer_ptr == NULL) {
     u_logger_error("error reallocating addrs buffer");
     return -1;
