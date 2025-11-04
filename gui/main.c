@@ -10,7 +10,7 @@
 
 #define FONT_HEIGHT 10
 #define FONT_SIZE 10
-#define WINDOW_HEIGHT 600
+#define WINDOW_HEIGHT 800
 #define WINDOW_WIDTH 800
 
 int text_width(mu_Font font, const char *str, int len) {
@@ -34,11 +34,20 @@ void render_addresses(data_context_t *data_context, mu_Context *ctx) {
     mu_label(ctx, host);
     free(host);
   }
-
+  
   for (int i = 0; i < data_context->addr_count; i++) {
     ip_addr addr = data_context->addrs_buffer[i];
     if (mu_button(ctx, addr)) {
-      mu_open_popup(ctx, "hello from addr");
+      mu_open_popup(ctx, addr);
+      
+    }
+    if (mu_begin_popup(ctx, addr)) {
+        if (mu_begin_window(ctx, addr, mu_rect(100, 100, 300,300))) {
+          mu_label(ctx, "you opened new window from addr button");
+          mu_end_window(ctx);
+        }
+
+        mu_end_popup(ctx);
     }
   }
 }
@@ -69,7 +78,6 @@ void main() {
     proccess_message_queue(data_context, ipc->message_queue, tpool);
 
     BeginDrawing();
-
     if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
       is_left_mouse_down = false;
     }
@@ -87,13 +95,13 @@ void main() {
 
     if (IsKeyPressed(KEY_F1)) {
       int res = shm_unlink(FILE_NAME);
-      u_logger_info("shutting down... \n unlinking shared memory: %d\n", res);
+      u_logger_info("shutting down... \n clearing shared memory: %d\n", res);
       fflush(stdout);
       abort();
     }
 
     mu_begin(ctx);
-    if (mu_begin_window(ctx, "My Window", mu_rect(10, 10, 800, 600))) {
+    if (mu_begin_window(ctx, "My Window", mu_rect(10, 10, WINDOW_WIDTH, WINDOW_HEIGHT))) {
       mu_layout_row(ctx, 3, (int[]){60, -1}, 0);
 
       mu_label(ctx, "First:");
@@ -136,11 +144,18 @@ void main() {
       } break;
       case MU_COMMAND_CLIP: {
         // u_logger_info("NK_COMMAND_CLIP\n");
-      }
+        int h = cmd->clip.rect.h;
+        int w = cmd->clip.rect.w;
+        int x = cmd->clip.rect.x;
+        int y = cmd->clip.rect.y;
+        // BeginScissorMode(x,y,w,h);
+        u_logger_info("mu_clip: h %d w %d x %d y %d");
+        
       }
     }
-
+  }
     ClearBackground(BLACK);
+    // EndScissorMode();
     EndDrawing();
   }
 }
