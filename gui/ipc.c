@@ -8,12 +8,6 @@
 #define SHIFT_OFFSET(offset_ptr, payload_size)                                 \
   ((*offset_ptr) += (payload_size) + (uint32_size * 2))
 
-void copy_to_buff(char *memory, char *buffer) {
-  // char *ptr_start = memory + start_offset;
-  // for (int i = 0; i < size; i++) {
-  // }
-}
-
 void *worker(void *arg) {
   struct ipc_command *command = (struct ipc_command *)arg;
   printf("INFO: STARTED NEW WORKER\n");
@@ -32,41 +26,12 @@ void *worker(void *arg) {
   return NULL;
 }
 
-// void handle_message(int cmd_type, ipc_state_t *ipc, char *buffer) {
-//   pthread_t thread;
-
-//   struct ipc_command *command = malloc(sizeof(struct ipc_command));
-//   if (!command)
-//     return;
-
-//   void *(*handler)(void *);
-//   command->ipc_state_t = ipc;
-//   switch (cmd_type) {
-//   case CMD_GET_IP_ADDRS:
-//     struct ipc_get_addresses_command *cmd =
-//         malloc(sizeof(ipc_get_addresses_command));
-//     cmd->buffer = buffer;
-//     cmd->memory_ptr = ipc->memory;
-
-//     command->pointer_to_cmd = cmd;
-//     // command->handler = get_addresses;
-//     break;
-
-//   default:
-//     break;
-//   }
-
-//   pthread_create(&thread, NULL, worker, (void *)command);
-//   pthread_detach(thread);
-// }
-
 void send_ipc_command(command_message cmdMsg, ipc_state_t *ipcState) {
   uint32_t write_offset = *ipcState->back_cb->write_offset;
   char *destination = ipcState->back_cb->memory_block + write_offset;
-  int cmd_type_size = sizeof(cmdMsg.command_type);
-  memcpy(destination, &cmdMsg.command_type, cmd_type_size);
+  memcpy(destination, &cmdMsg.command_type, uint32_size);
   // copy payload size as the same size as cmd type as they both uint_32t
-  memcpy(destination + cmd_type_size, &cmdMsg.payload_size, cmd_type_size);
+  memcpy(destination + uint32_size, &cmdMsg.payload_size, uint32_size);
 }
 
 int check_rw_status(ipc_state_t *ipc_state) {
@@ -210,18 +175,10 @@ ipc_state_t *initialize_shared_memory() {
   return ipc;
 }
 
-void proccess_ip_addrs(void *command_handler_arg) {
-  command_handler_t *command_handler = command_handler_arg;
-  data_context_t *data_context = command_handler->data_context_t;
-  int result = reallocate_addr_buffer(data_context);
-  if (result == -1) {
-    u_logger_error("error reallocating buffer");
-    abort();
-  }
-  u_logger_info("buffer from received command %s", command_handler->buffer);
-  int addr_count = 0;
-  const char *delimiter = ",";
-  char *str = strtok(command_handler->buffer, delimiter);
+int copy_addrs_to_buffer(char *buffer, char **result_buffer,
+                         int res_buffer_size, const char *delimiter) {
+  int num_size = 0;
+  char *str = strtok(buffer, delimiter);
   while (str != NULL) {
     ip_addr addr = malloc(sizeof(char) * strlen(str) + 1);
     addr[strlen(str)] = '\0';
@@ -233,22 +190,43 @@ void proccess_ip_addrs(void *command_handler_arg) {
     strcpy(addr, str);
 
     str = strtok(NULL, delimiter);
-    data_context->addrs_buffer[addr_count] = addr;
-
-    u_logger_info("copied to addr buffer: %s\n",
-                  data_context->addrs_buffer[addr_count]);
-    addr_count++;
-    if (addr_count >= data_context->addr_capacity) {
-      u_logger_info("addrs exceeds maximum capacity, returning...");
-      goto cleanup;
+    result_buffer[num_size] = addr;
+    if (num_size >= res_buffer_size) {
+      return num_size; // TODO: prevent race conditions
     }
+    num_size++;
   }
+  return num_size;
+}
 
-cleanup:
-  u_logger_info("cleaning up...");
+void processes_ip_addrs_handler(void *command_handler_arg) {
+  command_handler_t *command_handler = command_handler_arg;
+  data_context_t *data_context = command_handler->data_context_t;
+  int result = reallocate_addr_buffer(data_context);
+  if (result == -1) {
+    u_logger_error("error reallocating buffer");
+    abort();
+  }
+  u_logger_info("buffer from received command %s", command_handler->buffer);
+
+  int addr_count =
+      copy_addrs_to_buffer(command_handler->buffer, data_context->addrs_buffer,
+                           data_context->addr_capacity, ",");
+  addr_count++;
+
   free(command_handler->buffer);
   free(command_handler);
   data_context->addr_count = addr_count;
+}
+
+void process_identify_host_handler(void *command_handler_arg) {
+  command_handler_t *command_handler = command_handler_arg;
+  data_context_t *data_context = command_handler->data_context_t;
+  char *buffer[1] = {};
+
+  copy_addrs_to_buffer(command_handler->buffer, buffer, 1, ",");
+  data_context->host_addr = buffer[0];
+  u_logger_info("%s", data_context->host_addr);
 }
 
 command_handler_t *get_command_handler(data_context_t *data_context,
@@ -258,12 +236,14 @@ command_handler_t *get_command_handler(data_context_t *data_context,
   handler->buffer = buffer;
   switch (cmd_type) {
   case CMD_GET_IP_ADDRS:
-    handler->func = proccess_ip_addrs;
+    u_logger_info("CMD_GET_IP_ADDRS %d", cmd_type);
+    handler->func = processes_ip_addrs_handler;
     break;
+  case CMD_IDENTIFY_HOST:
+    u_logger_info("CMD_IDENTIFY_HOST %d", cmd_type);
+    handler->func = process_identify_host_handler;
   default:
     break;
   }
   return handler;
 }
-
-// TODO: prevent race conditions

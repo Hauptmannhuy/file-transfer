@@ -66,7 +66,7 @@ typedef struct ipc_get_addresses_command {
   char *memory_ptr;
 } ipc_get_addresses_command;
 
-enum command_types { CMD_GET_IP_ADDRS = 1 };
+enum command_types { CMD_GET_IP_ADDRS = 1, CMD_IDENTIFY_HOST = 2 };
 
 enum status {
   READY_RDWR = 0,
@@ -80,10 +80,8 @@ typedef struct command_handler_t {
 } command_handler_t;
 
 void start_listener(ipc_state_t *ipc_state, thread_pool_t *tpool);
-// void copy_to_buff(char *memory, char *buffer);
 int check_rw_status(ipc_state_t *ipc_state);
 void send_ipc_command(command_message cmdMsg, ipc_state_t *ipc_state);
-void handle_message(int type, ipc_state_t *memory, char *buffer);
 ipc_state_t *initialize_shared_memory();
 
 void proccess_message_queue(data_context_t *data_context,

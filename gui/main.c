@@ -25,6 +25,16 @@ void init_rendering() {
 }
 
 void render_addresses(data_context_t *data_context, mu_Context *ctx) {
+  char *host = NULL;
+  if (data_context->host_addr != NULL && strlen(data_context->host_addr) > 0) {
+    char *host_label = "Host address";
+    size_t size = strlen(host_label) + strlen(data_context->host_addr);
+    char *host = malloc(size + 1);
+    sprintf(host, "%s %s", host_label, data_context->host_addr);
+    mu_label(ctx, host);
+    free(host);
+  }
+
   for (int i = 0; i < data_context->addr_count; i++) {
     ip_addr addr = data_context->addrs_buffer[i];
     if (mu_button(ctx, addr)) {
@@ -84,7 +94,7 @@ void main() {
 
     mu_begin(ctx);
     if (mu_begin_window(ctx, "My Window", mu_rect(10, 10, 800, 600))) {
-      mu_layout_row(ctx, 2, (int[]){60, -1}, 0);
+      mu_layout_row(ctx, 3, (int[]){60, -1}, 0);
 
       mu_label(ctx, "First:");
       if (mu_button(ctx, "Request ip adresses")) {
