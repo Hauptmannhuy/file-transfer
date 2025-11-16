@@ -22,10 +22,6 @@ int reallocate_addr_buffer(data_context_t *data_context) {
     free(data_context->addrs_buffer[i]);
   }
 
-  if (data_context->addrs_buffer != NULL) {
-    free(data_context->addrs_buffer);
-  }
-
   void *buffer_ptr = calloc(data_context->addr_capacity, sizeof(ip_addr));
   if (buffer_ptr == NULL) {
     u_logger_error("error reallocating addrs buffer");

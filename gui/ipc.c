@@ -190,10 +190,10 @@ int copy_addrs_to_buffer(char *buffer, char **result_buffer,
     strcpy(addr, str);
 
     str = strtok(NULL, delimiter);
-    result_buffer[num_size] = addr;
     if (num_size >= res_buffer_size) {
-      return num_size; // TODO: prevent race conditions
+      return num_size;
     }
+    result_buffer[num_size] = addr;
     num_size++;
   }
   return num_size;
@@ -212,7 +212,6 @@ void processes_ip_addrs_handler(void *command_handler_arg) {
   int addr_count =
       copy_addrs_to_buffer(command_handler->buffer, data_context->addrs_buffer,
                            data_context->addr_capacity, ",");
-  addr_count++;
 
   free(command_handler->buffer);
   free(command_handler);

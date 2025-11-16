@@ -10,8 +10,11 @@
 
 #define FONT_HEIGHT 10
 #define FONT_SIZE 10
-#define WINDOW_HEIGHT 800
-#define WINDOW_WIDTH 800
+#define MAIN_WINDOW_HEIGHT 600
+#define MAIN_WINDOW_WIDTH 800
+
+bool address_panel_enabled;
+char current_rendering_address[50] = {};
 
 int text_width(mu_Font font, const char *str, int len) {
   return MeasureText(TextFormat("%.*s", len, str), FONT_SIZE);
@@ -21,33 +24,41 @@ int text_height(mu_Font font) { return FONT_HEIGHT; }
 
 void init_rendering() {
   SetTargetFPS(60);
-  InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Demo window");
+  InitWindow(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, "Demo window");
 }
 
-void render_addresses(data_context_t *data_context, mu_Context *ctx) {
+void render_host_addr(data_context_t *data_context, mu_Context *ctx) {
   char *host = NULL;
   if (data_context->host_addr != NULL && strlen(data_context->host_addr) > 0) {
     char *host_label = "Host address";
-    size_t size = strlen(host_label) + strlen(data_context->host_addr);
-    char *host = malloc(size + 1);
+    const int padding_bytes = 2;
+    size_t str_lenth = strlen(host_label) + strlen(data_context->host_addr);
+    char *host = malloc(str_lenth + padding_bytes);
     sprintf(host, "%s %s", host_label, data_context->host_addr);
     mu_label(ctx, host);
     free(host);
   }
-  
+}
+
+void render_address_panel(mu_Context *ctx, char *addr) {
+  if (mu_begin_window(ctx, addr, mu_rect(100, 100, 300, 300))) {
+    mu_label(ctx, "you opened new window from addr button");
+    mu_end_window(ctx);
+  }
+}
+
+void render_peer_addresses(data_context_t *data_context, mu_Context *ctx) {
+
   for (int i = 0; i < data_context->addr_count; i++) {
     ip_addr addr = data_context->addrs_buffer[i];
-    if (mu_button(ctx, addr)) {
-      mu_open_popup(ctx, addr);
-      
-    }
-    if (mu_begin_popup(ctx, addr)) {
-        if (mu_begin_window(ctx, addr, mu_rect(100, 100, 300,300))) {
-          mu_label(ctx, "you opened new window from addr button");
-          mu_end_window(ctx);
-        }
 
-        mu_end_popup(ctx);
+    if (address_panel_enabled) {
+      render_address_panel(ctx, current_rendering_address);
+    } else {
+      if (mu_button(ctx, addr)) {
+        strcpy(current_rendering_address, addr);
+        address_panel_enabled = true;
+      }
     }
   }
 }
@@ -72,25 +83,22 @@ void main() {
   start_listener(ipc, tpool);
   char *ip_addrs_buffer = malloc(256);
 
-  bool is_left_mouse_down;
-
   while (!WindowShouldClose()) {
     proccess_message_queue(data_context, ipc->message_queue, tpool);
 
     BeginDrawing();
-    if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
-      is_left_mouse_down = false;
+    ClearBackground(BLACK);
+
+    int mouse_x = GetMouseX();
+    int mouse_y = GetMouseY();
+    mu_input_mousemove(ctx, mouse_x, mouse_y);
+
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      mu_input_mousedown(ctx, mouse_x, mouse_y, MU_MOUSE_LEFT);
     }
 
-    if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && !is_left_mouse_down) {
-      Vector2 position = GetMousePosition();
-      mu_input_mousedown(ctx, position.x, position.y, MU_MOUSE_LEFT);
-      is_left_mouse_down = true;
-    }
-
-    if (IsMouseButtonUp(MOUSE_LEFT_BUTTON)) {
-      Vector2 position = GetMousePosition();
-      mu_input_mouseup(ctx, position.x, position.y, MU_MOUSE_LEFT);
+    if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+      mu_input_mouseup(ctx, mouse_x, mouse_y, MU_MOUSE_LEFT);
     }
 
     if (IsKeyPressed(KEY_F1)) {
@@ -101,14 +109,16 @@ void main() {
     }
 
     mu_begin(ctx);
-    if (mu_begin_window(ctx, "My Window", mu_rect(10, 10, WINDOW_WIDTH, WINDOW_HEIGHT))) {
-      mu_layout_row(ctx, 3, (int[]){60, -1}, 0);
+    if (mu_begin_window(
+            ctx, "My Window",
+            mu_rect(10, 10, MAIN_WINDOW_WIDTH / 2, MAIN_WINDOW_HEIGHT / 2))) {
+      mu_layout_row(ctx, 2, (int[]){60, -1}, 0);
 
       mu_label(ctx, "First:");
       if (mu_button(ctx, "Request ip adresses")) {
-        command_message cmd = {.command_type = CMD_GET_IP_ADDRS,
-                               .payload_size = 0};
-        send_ipc_command(cmd, ipc);
+        command_message cmd_message = {.command_type = CMD_GET_IP_ADDRS,
+                                       .payload_size = 0};
+        send_ipc_command(cmd_message, ipc);
         u_logger_info("Button1 pressed\n");
       }
 
@@ -122,8 +132,15 @@ void main() {
         mu_end_popup(ctx);
       }
 
-      render_addresses(data_context, ctx);
+      render_host_addr(data_context, ctx);
+      render_peer_addresses(data_context, ctx);
+      mu_end_window(ctx);
+    }
 
+    if (mu_begin_window(
+            ctx, "example address",
+            mu_rect(MAIN_WINDOW_HEIGHT / 2, MAIN_WINDOW_WIDTH / 2, 150, 150))) {
+      mu_label(ctx, "you opened new window from addr button");
       mu_end_window(ctx);
     }
 
@@ -138,24 +155,19 @@ void main() {
                       cmd->rect.rect.h, cast_color(cmd->rect.color));
       } break;
       case MU_COMMAND_TEXT: {
-        // u_logger_info("NK_COMMAND_TEXT %s\n", cmd->text.str);
         DrawText(cmd->text.str, cmd->text.pos.x, cmd->text.pos.y, FONT_SIZE,
                  cast_color(cmd->text.color));
       } break;
       case MU_COMMAND_CLIP: {
-        // u_logger_info("NK_COMMAND_CLIP\n");
         int h = cmd->clip.rect.h;
         int w = cmd->clip.rect.w;
         int x = cmd->clip.rect.x;
         int y = cmd->clip.rect.y;
-        // BeginScissorMode(x,y,w,h);
-        u_logger_info("mu_clip: h %d w %d x %d y %d");
-        
+        BeginScissorMode(x, y, w, h);
+        EndScissorMode();
+      }
       }
     }
-  }
-    ClearBackground(BLACK);
-    // EndScissorMode();
     EndDrawing();
   }
 }
