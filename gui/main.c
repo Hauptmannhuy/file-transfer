@@ -14,7 +14,8 @@
 #define MAIN_WINDOW_WIDTH 800
 
 bool address_panel_enabled;
-char current_rendering_address[50] = {};
+char selected_addr[50] = {};
+mu_Container *current_opened_address_panel;
 
 int text_width(mu_Font font, const char *str, int len) {
   return MeasureText(TextFormat("%.*s", len, str), FONT_SIZE);
@@ -25,6 +26,15 @@ int text_height(mu_Font font) { return FONT_HEIGHT; }
 void init_rendering() {
   SetTargetFPS(60);
   InitWindow(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, "Demo window");
+}
+
+void open_panel(mu_Context *ctx, char *id_container_to_open) {;
+  mu_Container *panel = mu_get_container(ctx, id_container_to_open);
+  if (panel == NULL) {
+    return;
+  }
+  u_logger_info("open panel");
+  panel->open = 1;
 }
 
 void render_host_addr(data_context_t *data_context, mu_Context *ctx) {
@@ -41,24 +51,23 @@ void render_host_addr(data_context_t *data_context, mu_Context *ctx) {
 }
 
 void render_address_panel(mu_Context *ctx, char *addr) {
-  if (mu_begin_window(ctx, addr, mu_rect(100, 100, 300, 300))) {
-    mu_label(ctx, "you opened new window from addr button");
-    mu_end_window(ctx);
+  if (address_panel_enabled) {
+    if (mu_begin_window(ctx, addr, mu_rect(100, 100, 300, 300))) {
+      mu_label(ctx, "you opened new window from addr button");
+      mu_Container *selected_container = mu_get_container(ctx, addr);
+      u_logger_info("selected container is open %d", selected_container->open);
+      mu_end_window(ctx);
+    }
   }
 }
 
-void render_peer_addresses(data_context_t *data_context, mu_Context *ctx) {
-
+void render_peer_addresses_selection(data_context_t *data_context, mu_Context *ctx) {
   for (int i = 0; i < data_context->addr_count; i++) {
-    ip_addr addr = data_context->addrs_buffer[i];
-
-    if (address_panel_enabled) {
-      render_address_panel(ctx, current_rendering_address);
-    } else {
-      if (mu_button(ctx, addr)) {
-        strcpy(current_rendering_address, addr);
-        address_panel_enabled = true;
-      }
+    ip_addr current_addr = data_context->addrs_buffer[i];
+    if (mu_button(ctx, current_addr)) {
+      open_panel(ctx, current_addr);
+      address_panel_enabled = true;
+      strcpy(selected_addr, current_addr);
     }
   }
 }
@@ -133,7 +142,10 @@ void main() {
       }
 
       render_host_addr(data_context, ctx);
-      render_peer_addresses(data_context, ctx);
+      render_peer_addresses_selection(data_context, ctx);
+      render_address_panel(ctx, selected_addr);
+
+
       mu_end_window(ctx);
     }
 
