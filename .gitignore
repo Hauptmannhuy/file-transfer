@@ -4,3 +4,6 @@ debug
 ips
 /gui/out
 /gui/microui
+/gui/.vscode
+/gui/compile_commands.json
+/gui/.cache

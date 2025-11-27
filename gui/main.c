@@ -1,5 +1,6 @@
-
 #include "data_context.h"
+#include "gtk/gtk.h"
+#include "gtk/gtkshortcut.h"
 #include "ipc.h"
 #include "logger.h"
 #include "microui/src/microui.h"
@@ -7,7 +8,6 @@
 #include "stdio.h"
 #include "stdlib.h"
 #include "tpool.h"
-
 #define FONT_HEIGHT 10
 #define FONT_SIZE 10
 #define MAIN_WINDOW_HEIGHT 600
@@ -23,12 +23,21 @@ int text_width(mu_Font font, const char *str, int len) {
 
 int text_height(mu_Font font) { return FONT_HEIGHT; }
 
-void init_rendering() {
-  SetTargetFPS(60);
-  InitWindow(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, "Demo window");
+void open_file_dialog() {
+  GtkFileDialog *dialog = gtk_file_dialog_new();
+  GtkWindow *window = GTK_WINDOW(gtk_window_new());
+  gtk_file_dialog_open(dialog, window, NULL, NULL, NULL);
+
+  free(dialog);
+  free(window);
 }
 
-void open_panel(mu_Context *ctx, char *id_container_to_open) {;
+void init_rendering() {
+  SetTargetFPS(60);
+  InitWindow(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, "Demo Window");
+}
+
+void open_panel(mu_Context *ctx, char *id_container_to_open) {
   mu_Container *panel = mu_get_container(ctx, id_container_to_open);
   if (panel == NULL) {
     return;
@@ -53,15 +62,17 @@ void render_host_addr(data_context_t *data_context, mu_Context *ctx) {
 void render_address_panel(mu_Context *ctx, char *addr) {
   if (address_panel_enabled) {
     if (mu_begin_window(ctx, addr, mu_rect(100, 100, 300, 300))) {
-      mu_label(ctx, "you opened new window from addr button");
       mu_Container *selected_container = mu_get_container(ctx, addr);
-      u_logger_info("selected container is open %d", selected_container->open);
+      if (mu_button(ctx, "send file")) {
+        open_file_dialog();
+      }
       mu_end_window(ctx);
     }
   }
 }
 
-void render_peer_addresses_selection(data_context_t *data_context, mu_Context *ctx) {
+void render_peer_addresses_selection(data_context_t *data_context,
+                                     mu_Context *ctx) {
   for (int i = 0; i < data_context->addr_count; i++) {
     ip_addr current_addr = data_context->addrs_buffer[i];
     if (mu_button(ctx, current_addr)) {
@@ -74,16 +85,17 @@ void render_peer_addresses_selection(data_context_t *data_context, mu_Context *c
 
 Color cast_color(mu_Color color) { return *(Color *)&color; }
 
-void main() {
+int main() {
   ipc_state_t *ipc = initialize_shared_memory();
   if (ipc == NULL) {
     u_logger_error("ERROR: error initializing ipc\n");
-    return;
+    return 1;
   }
 
   mu_Context *ctx = malloc(sizeof(mu_Context));
   data_context_t *data_context = data_context_init();
   mu_init(ctx);
+  gtk_init();
   ctx->text_width = text_width;
   ctx->text_height = text_height;
   init_rendering();
@@ -145,7 +157,6 @@ void main() {
       render_peer_addresses_selection(data_context, ctx);
       render_address_panel(ctx, selected_addr);
 
-
       mu_end_window(ctx);
     }
 
@@ -182,4 +193,5 @@ void main() {
     }
     EndDrawing();
   }
+  return 0;
 }
