@@ -1,4 +1,6 @@
 #include "data_context.h"
+#include "gio/gio.h"
+#include "glib.h"
 #include "gtk/gtk.h"
 #include "gtk/gtkshortcut.h"
 #include "ipc.h"
@@ -23,13 +25,27 @@ int text_width(mu_Font font, const char *str, int len) {
 
 int text_height(mu_Font font) { return FONT_HEIGHT; }
 
-void open_file_dialog() {
-  GtkFileDialog *dialog = gtk_file_dialog_new();
-  GtkWindow *window = GTK_WINDOW(gtk_window_new());
-  gtk_file_dialog_open(dialog, window, NULL, NULL, NULL);
+void open_file_dialog_callback(GObject *source_object, GAsyncResult *res,
+                               gpointer data) {
+  GError *error;
+  GFile *file =
+      gtk_file_dialog_open_finish((GtkFileDialog *)source_object, res, &error);
 
-  free(dialog);
-  free(window);
+  if (file == NULL) {
+    u_logger_error("error opening file from file dialog %s", error->message);
+    g_error_free(error);
+  }
+
+  const char *path = g_file_peek_path(file);
+  u_logger_info("path to selected file %s", path);
+  u_logger_info("file dialog callback fired");
+  g_object_unref(file);
+}
+
+void open_file_dialog() {
+  GtkFileDialog *dialog;
+  dialog = gtk_file_dialog_new();
+  gtk_file_dialog_open(dialog, NULL, NULL, open_file_dialog_callback, NULL);
 }
 
 void init_rendering() {
@@ -191,6 +207,9 @@ int main() {
       }
       }
     }
+
+    while (g_main_context_iteration(NULL, false))
+      ;
     EndDrawing();
   }
   return 0;

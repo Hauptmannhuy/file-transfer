@@ -13,23 +13,23 @@ void u_logger_impl(char *file, int line, LOG_TYPE type, char *fmt, ...) {
   }
   char *str_type = "UNKNOWN";
   switch (type) {
-  case info:
+  case log_info:
     str_type = "INFO";
     break;
-  case warn:
+  case log_warn:
     str_type = "WARN";
     break;
-  case success:
+  case log_success:
     str_type = "SUCCESS";
     break;
-  case error:
+  case log_error:
     str_type = "ERROR";
     break;
   default:
     break;
   }
 
-  FILE *stream = type == error ? stderr : stdout;
+  FILE *stream = type == log_error ? stderr : stdout;
 
   va_list args;
   va_start(args, fmt);
