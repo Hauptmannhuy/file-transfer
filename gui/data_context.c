@@ -7,7 +7,7 @@ data_context_t *data_context_init() {
   data_context_t *context = malloc(sizeof(data_context_t));
   context->addr_capacity = INITIAL_ADDRS_CAPACITY;
   context->addr_count = 0;
-  context->addrs_buffer = calloc(INITIAL_ADDRS_CAPACITY, sizeof(ip_addr));
+  context->addrs_buffer = calloc(INITIAL_ADDRS_CAPACITY, sizeof(conn_peer_t));
   context->host_addr = NULL;
   return context;
 }
@@ -22,7 +22,7 @@ int reallocate_addr_buffer(data_context_t *data_context) {
     free(data_context->addrs_buffer[i]);
   }
 
-  void *buffer_ptr = calloc(data_context->addr_capacity, sizeof(ip_addr));
+  void *buffer_ptr = calloc(data_context->addr_capacity, sizeof(conn_peer_t));
   if (buffer_ptr == NULL) {
     u_logger_error("error reallocating addrs buffer");
     return -1;
@@ -31,4 +31,10 @@ int reallocate_addr_buffer(data_context_t *data_context) {
   data_context->addrs_buffer = buffer_ptr;
 
   return 0;
+}
+
+conn_peer_t* init_conn_peer(){
+  conn_peer_t *peer = malloc(sizeof(conn_peer_t));
+  peer->connected = 0;
+  return peer;
 }

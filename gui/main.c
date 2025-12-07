@@ -17,7 +17,10 @@
 
 bool address_panel_enabled;
 char selected_addr[50] = {};
+char selected_file_path[100];
 mu_Container *current_opened_address_panel;
+
+// TODO testing
 
 int text_width(mu_Font font, const char *str, int len) {
   return MeasureText(TextFormat("%.*s", len, str), FONT_SIZE);
@@ -37,6 +40,8 @@ void open_file_dialog_callback(GObject *source_object, GAsyncResult *res,
   }
 
   const char *path = g_file_peek_path(file);
+  strcpy(selected_file_path, path);
+  selected_file_path[strlen(path)] = '\0';
   u_logger_info("path to selected file %s", path);
   u_logger_info("file dialog callback fired");
   g_object_unref(file);
@@ -46,6 +51,17 @@ void open_file_dialog() {
   GtkFileDialog *dialog;
   dialog = gtk_file_dialog_new();
   gtk_file_dialog_open(dialog, NULL, NULL, open_file_dialog_callback, NULL);
+}
+
+void send_file_path(void *ipc) {
+  open_file_dialog();
+  while (strlen(selected_file_path) == 0)
+    ;
+  command_message cmd_msg = {0};
+  cmd_msg.command_type = CMD_SEND_FILE_PATH;
+  cmd_msg.payload = selected_file_path;
+  cmd_msg.payload_size = strlen(selected_file_path);
+  send_ipc_command(cmd_msg, ipc);
 }
 
 void init_rendering() {
@@ -75,12 +91,13 @@ void render_host_addr(data_context_t *data_context, mu_Context *ctx) {
   }
 }
 
-void render_address_panel(mu_Context *ctx, char *addr) {
+void render_address_panel(mu_Context *ctx, thread_pool_t *tpool,
+                          ipc_state_t *ipc, char *addr) {
   if (address_panel_enabled) {
     if (mu_begin_window(ctx, addr, mu_rect(100, 100, 300, 300))) {
       mu_Container *selected_container = mu_get_container(ctx, addr);
       if (mu_button(ctx, "send file")) {
-        open_file_dialog();
+        tpool_add_work(tpool, send_file_path, ipc);
       }
       mu_end_window(ctx);
     }
@@ -90,11 +107,11 @@ void render_address_panel(mu_Context *ctx, char *addr) {
 void render_peer_addresses_selection(data_context_t *data_context,
                                      mu_Context *ctx) {
   for (int i = 0; i < data_context->addr_count; i++) {
-    ip_addr current_addr = data_context->addrs_buffer[i];
-    if (mu_button(ctx, current_addr)) {
-      open_panel(ctx, current_addr);
+    conn_peer_t *current_addr = data_context->addrs_buffer[i];
+    if (mu_button(ctx, current_addr->ip)) {
+      open_panel(ctx, current_addr->ip);
       address_panel_enabled = true;
-      strcpy(selected_addr, current_addr);
+      strcpy(selected_addr, current_addr->ip);
     }
   }
 }
@@ -171,7 +188,7 @@ int main() {
 
       render_host_addr(data_context, ctx);
       render_peer_addresses_selection(data_context, ctx);
-      render_address_panel(ctx, selected_addr);
+      render_address_panel(ctx, tpool, ipc, selected_addr);
 
       mu_end_window(ctx);
     }

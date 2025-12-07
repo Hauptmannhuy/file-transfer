@@ -32,6 +32,9 @@ void send_ipc_command(command_message cmdMsg, ipc_state_t *ipcState) {
   memcpy(destination, &cmdMsg.command_type, uint32_size);
   // copy payload size as the same size as cmd type as they both uint_32t
   memcpy(destination + uint32_size, &cmdMsg.payload_size, uint32_size);
+  u_logger_info("sending message with %d command_type, %d payload_size",
+                cmdMsg.command_type, cmdMsg.payload_size);
+  u_logger_info("message payload \n %s", cmdMsg.payload);
 }
 
 int check_rw_status(ipc_state_t *ipc_state) {
@@ -180,7 +183,7 @@ int copy_addrs_to_buffer(char *buffer, char **result_buffer,
   int num_size = 0;
   char *str = strtok(buffer, delimiter);
   while (str != NULL) {
-    ip_addr addr = malloc(sizeof(char) * strlen(str) + 1);
+    char *addr = malloc(sizeof(char) * strlen(str) + 1);
     addr[strlen(str)] = '\0';
     if (addr == NULL) {
       u_logger_error("error malloc on addr");
@@ -208,11 +211,17 @@ void processes_ip_addrs_handler(void *command_handler_arg) {
     abort();
   }
   u_logger_info("buffer from received command %s", command_handler->buffer);
+  int count = data_context->addr_capacity;
+  char *result_buffer[count];
+  
 
-  int addr_count =
-      copy_addrs_to_buffer(command_handler->buffer, data_context->addrs_buffer,
-                           data_context->addr_capacity, ",");
-
+  int addr_count = copy_addrs_to_buffer(command_handler->buffer, result_buffer, count, ",");
+  for (int i = 0; i < count; i++)
+  {
+    data_context->addrs_buffer[i] = init_conn_peer();
+    data_context->addrs_buffer[i]->ip = result_buffer[i];
+  }
+  
   free(command_handler->buffer);
   free(command_handler);
   data_context->addr_count = addr_count;

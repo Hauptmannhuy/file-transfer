@@ -66,7 +66,11 @@ typedef struct ipc_get_addresses_command {
   char *memory_ptr;
 } ipc_get_addresses_command;
 
-enum command_types { CMD_GET_IP_ADDRS = 1, CMD_IDENTIFY_HOST = 2 };
+enum command_types {
+  CMD_GET_IP_ADDRS = 1,
+  CMD_IDENTIFY_HOST = 2,
+  CMD_SEND_FILE_PATH = 3
+};
 
 enum status {
   READY_RDWR = 0,

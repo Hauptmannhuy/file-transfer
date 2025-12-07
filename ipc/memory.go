@@ -2,7 +2,6 @@ package ipc
 
 import (
 	"encoding/binary"
-	scaner "file-transfer/scan"
 	"fmt"
 	"log"
 	"net"
@@ -11,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	scaner "file-transfer/scan"
 )
 
 type IPCstate struct {
@@ -82,6 +83,7 @@ type clientCmdEnum uint8
 const (
 	CmdRequestAddresses clientCmdEnum = iota + 1
 	CmdIdentifyHost
+	CmdSendFile
 )
 
 var ClientCommands []clientCmdEnum = []clientCmdEnum{
@@ -89,7 +91,8 @@ var ClientCommands []clientCmdEnum = []clientCmdEnum{
 }
 
 func InitIPC() (*IPCstate, error) {
-	f, err := os.OpenFile(filepath.Join("/dev/shm/", filename), os.O_RDWR, 0666)
+
+	f, err := os.OpenFile(filepath.Join("/dev/shm/", filename), os.O_RDWR, 0o666)
 	if err != nil {
 		return nil, fmt.Errorf("err opening file: %v", err)
 	}
@@ -132,9 +135,13 @@ func (ipcState *IPCstate) ProccessQueue() {
 		switch uint32(requestCmd.cmdType) {
 		case uint32(CmdRequestAddresses):
 			data = scaner.Scan()
-		}
+		case uint32(CmdSendFile):
 
-		buffer := encodePayload(data)
+		}
+		var buffer []byte
+		if data != nil {
+			buffer = encodePayload(data)
+		}
 		responseMsg := newMessage(requestCmd.cmdType, buffer)
 		ipcState.sendMessage(responseMsg)
 		ipcState.MemoryBlock[CMD_RW_STATUS_ADRESS] = byte(statusIdle)
@@ -155,6 +162,7 @@ func (ipcState *IPCstate) Listen() {
 		}
 		fmt.Println("decoded message type", msg.cmdType)
 		updateSize := getUpdateSize(msg)
+		fmt.Println(updateSize)
 		UpdateWriteOffset(ipcState.backBlock.memory, updateSize)
 		ClearQueue(ipcState.backBlock.memory, offset, offset+updateSize)
 		ipcState.CmdHandler.Queue <- *msg
@@ -181,7 +189,6 @@ func DecodeCommandMsg(memory []byte, offset uint32) (*cmdMessage, error) {
 		cmdPayloadSize: payloadSize,
 		payload:        messagePayload,
 	}, nil
-
 }
 
 func ReadFourBytes(memory []byte, offset uint32) uint32 {
@@ -202,10 +209,12 @@ func UpdateWriteOffset(memory []byte, size uint32) {
 }
 
 func ClearQueue(memory []byte, offsetStart, offsetEnd uint32) {
-	fmt.Println(offsetStart, offsetEnd)
+	fmt.Println("clear queue with offset start-end:", offsetStart, offsetEnd)
+	fmt.Println("memory size", len(memory))
 	for i := offsetStart; i < offsetEnd; i++ {
 		memory[i] = 0
 	}
+	fmt.Println("queue cleared")
 }
 
 func (ipcState *IPCstate) sendMessage(message *cmdMessage) {
@@ -245,4 +254,9 @@ func (ipcState *IPCstate) identifyHost(localHostAddr *net.IPNet) {
 	message := newMessage(uint32(CmdIdentifyHost), buffer)
 	ipcState.sendMessage(message)
 	UpdateWriteOffset(ipcState.backBlock.memory, getUpdateSize(message))
+}
+
+func sendFile(filePath string) {
+	// file, err := os.Open(filePath)
+
 }
