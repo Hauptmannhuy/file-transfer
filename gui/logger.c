@@ -33,7 +33,7 @@ void u_logger_impl(char *file, int line, LOG_TYPE type, char *fmt, ...) {
 
   va_list args;
   va_start(args, fmt);
-  fprintf(stream, "[%s:%d] %s: ", file, line, str_type);
+  fprintf(stream, "[GUI] line=%d, file=%s, log_type=%s: ", line, file, str_type);
   vfprintf(stream, fmt, args);
   va_end(args);
   fputc('\n', stream);

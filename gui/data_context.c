@@ -38,3 +38,15 @@ conn_peer_t* init_conn_peer(){
   peer->connected = 0;
   return peer;
 }
+
+int is_connection_established(data_context_t *data_context, char *ip) {
+  for (int i = 0; i < data_context->addr_count; i++)
+  {
+    conn_peer_t *peer = data_context->addrs_buffer[i];
+    int equal = strcmp(ip, peer->ip);
+    if (equal == 0) {
+      return peer->connected;
+    }
+  }
+  
+}

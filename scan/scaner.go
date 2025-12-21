@@ -1,26 +1,24 @@
 package scaner
 
 import (
+	"errors"
+	"file-transfer/logger"
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mdlayher/arp"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 )
 
 var HandshakedIPs []string
-
-const (
-	ipAdressStart = "192.168.1.100"
-	ipAdressEnd   = "192.168.1.200"
-)
 
 const (
 	defaultIcmpConf = "ip:icmp"
@@ -34,7 +32,7 @@ type syncPipeChannel struct {
 	addresses []string
 }
 
-var localAddr *net.IPNet = GetLocalHostAddress()
+var localAddr *net.IPNet = GetLocalHostAddr()
 
 var icmpMsg *icmp.Message = &icmp.Message{
 	Type: ipv4.ICMPTypeEcho,
@@ -46,14 +44,103 @@ var icmpMsg *icmp.Message = &icmp.Message{
 	},
 }
 
-// returns list of ip separated by comma
-func Scan() string {
-	return pingLocalNetwork()
+func arpScanLocalNetwork() []string {
+	return arpScan(getNetInterface())
 }
 
-func getLastIpByte(ip string) string {
-	after, _ := strings.CutPrefix(ip, "192.168.1.")
-	return after
+func getNetInterface() *net.Interface {
+	i, err := net.Interfaces()
+	if err != nil {
+		log.Fatal("error getting net interfaces")
+	}
+
+	virtualIfaces := []string{
+		"docker",
+	}
+	for _, ninterface := range i {
+		flags := ninterface.Flags.String()
+
+		if strings.Contains(flags, net.FlagLoopback.String()) {
+			continue
+		}
+
+		if !strings.Contains(flags, net.FlagRunning.String()) {
+			continue
+		}
+
+		containsVirtual := false
+		for _, v := range virtualIfaces {
+			if strings.HasPrefix(ninterface.Name, v) {
+				containsVirtual = true
+				break
+			}
+		}
+
+		if containsVirtual {
+			continue
+		}
+
+		return &ninterface
+	}
+
+	return nil
+}
+
+func arpScan(enInterface *net.Interface) []string {
+	invokedAddrs := map[string]struct{}{}
+	client, err := arp.Dial(enInterface)
+	if err != nil {
+		log.Fatal(err)
+	}
+	wait := sync.WaitGroup{}
+	wait.Add(1)
+	logger.Log.Info("start arp")
+	for i := 0; i < 255; i++ {
+		addr := netip.AddrFrom4([4]byte{192, 168, 1, byte(i)})
+		err := client.Request(addr)
+
+		if err != nil {
+			logger.Log.Error(err.Error())
+		}
+
+	}
+	logger.Log.Info("end arp")
+	logger.Log.Info("wait...")
+
+	client.SetReadDeadline(time.Now().Add(time.Millisecond * 30000))
+
+	for {
+		pack, _, err := client.Read()
+
+		if err != nil {
+			var netError net.Error
+			logger.Log.Info(err.Error())
+			if errors.As(err, &netError) {
+				if netError.Timeout() {
+					break
+				}
+			}
+		}
+		logger.Log.Info("arp response")
+		client.SetReadDeadline(time.Now().Add(time.Millisecond * 3000))
+		invokedAddrs[pack.TargetIP.String()] = struct{}{}
+	}
+
+	keys := make([]string, 0, len(invokedAddrs))
+	for k := range invokedAddrs {
+		logger.Log.Debug("received addr %s", k)
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// returns list of ip separated by comma
+func Scan() string {
+	res := arpScanLocalNetwork()
+	if len(res) == 0 {
+		return localAddr.IP.String()
+	}
+	return strings.Join(res, ",")
 }
 
 func ping(ip string) {
@@ -72,19 +159,9 @@ func ping(ip string) {
 
 }
 
-func pingLocalNetwork() string {
+func icmpPingLocalNetwork() string {
 	var bytes []byte
 	syncPipeChan := newSyncPipeChan()
-
-	ipStartByte, err := strconv.Atoi(getLastIpByte(ipAdressStart))
-	if err != nil {
-		panic(err)
-	}
-
-	ipEndByte, err := strconv.Atoi(getLastIpByte(ipAdressEnd))
-	if err != nil {
-		panic(err)
-	}
 
 	icmpListen, err := icmp.ListenPacket(defaultIcmpConf, localAddr.IP.String())
 	if err != nil {
@@ -100,9 +177,11 @@ func pingLocalNetwork() string {
 	syncPipeChan.sync.Add(1)
 	go syncPipeChan.processAddresses()
 	go syncPipeChan.read(icmpListen)
-	for i := ipStartByte; i <= ipEndByte; i++ {
-		ip := "192.168.1." + strconv.Itoa(i)
-		go write(icmpListen, ip, bytes)
+	for i := 0; i <= 1; i++ {
+		for j := 0; j <= 254; j++ {
+			ip := fmt.Sprintf("192.168.%d.%d", i, j)
+			go write(icmpListen, ip, bytes)
+		}
 	}
 	syncPipeChan.sync.Wait()
 	err = icmpListen.Close()
@@ -135,7 +214,7 @@ func write(conn *icmp.PacketConn, ip string, msg []byte) *net.IPAddr {
 	return nil
 }
 
-func GetLocalHostAddress() *net.IPNet {
+func GetLocalHostAddr() *net.IPNet {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		log.Fatal(err)
@@ -176,7 +255,7 @@ func (pipe *syncPipeChannel) processAddresses() {
 }
 
 func newDuration() time.Duration {
-	return time.Until(time.Now().Add(800 * time.Millisecond))
+	return time.Until(time.Now().Add(1500 * time.Millisecond))
 }
 
 func (pipe *syncPipeChannel) read(conn *icmp.PacketConn) {
@@ -202,7 +281,7 @@ func (pipe *syncPipeChannel) read(conn *icmp.PacketConn) {
 			return
 		}
 
-		err := conn.SetReadDeadline(time.Now().Add(time.Millisecond * 300))
+		err := conn.SetReadDeadline(time.Now().Add(time.Millisecond * 1000))
 		if err != nil {
 			continue
 		}

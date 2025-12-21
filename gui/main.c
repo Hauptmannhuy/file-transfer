@@ -1,15 +1,15 @@
 #include "data_context.h"
-#include "gio/gio.h"
-#include "glib.h"
-#include "gtk/gtk.h"
-#include "gtk/gtkshortcut.h"
 #include "ipc.h"
 #include "logger.h"
-#include "microui/src/microui.h"
 #include "raylib.h"
 #include "stdio.h"
 #include "stdlib.h"
 #include "tpool.h"
+
+
+#include "microui/src/microui.h"
+#include "dependencies/libtinyfiledialogs/tinyfiledialogs.h"
+
 #define FONT_HEIGHT 10
 #define FONT_SIZE 10
 #define MAIN_WINDOW_HEIGHT 600
@@ -28,29 +28,11 @@ int text_width(mu_Font font, const char *str, int len) {
 
 int text_height(mu_Font font) { return FONT_HEIGHT; }
 
-void open_file_dialog_callback(GObject *source_object, GAsyncResult *res,
-                               gpointer data) {
-  GError *error;
-  GFile *file =
-      gtk_file_dialog_open_finish((GtkFileDialog *)source_object, res, &error);
-
-  if (file == NULL) {
-    u_logger_error("error opening file from file dialog %s", error->message);
-    g_error_free(error);
-  }
-
-  const char *path = g_file_peek_path(file);
-  strcpy(selected_file_path, path);
-  selected_file_path[strlen(path)] = '\0';
-  u_logger_info("path to selected file %s", path);
-  u_logger_info("file dialog callback fired");
-  g_object_unref(file);
-}
-
 void open_file_dialog() {
-  GtkFileDialog *dialog;
-  dialog = gtk_file_dialog_new();
-  gtk_file_dialog_open(dialog, NULL, NULL, open_file_dialog_callback, NULL);
+  
+  const char *selected_file = tinyfd_openFileDialog("File explorer", NULL, 0, NULL, NULL, 0);
+  strcpy(selected_file_path, selected_file);
+  u_logger_info("selected_file_path: %s", selected_file_path);
 }
 
 void send_file_path(void *ipc) {
@@ -84,20 +66,25 @@ void render_host_addr(data_context_t *data_context, mu_Context *ctx) {
     char *host_label = "Host address";
     const int padding_bytes = 2;
     size_t str_lenth = strlen(host_label) + strlen(data_context->host_addr);
-    char *host = malloc(str_lenth + padding_bytes);
+    char host[str_lenth + padding_bytes];
     sprintf(host, "%s %s", host_label, data_context->host_addr);
     mu_label(ctx, host);
-    free(host);
   }
 }
 
 void render_address_panel(mu_Context *ctx, thread_pool_t *tpool,
-                          ipc_state_t *ipc, char *addr) {
+                          ipc_state_t *ipc, char *addr, data_context_t *data_context) {
   if (address_panel_enabled) {
     if (mu_begin_window(ctx, addr, mu_rect(100, 100, 300, 300))) {
       mu_Container *selected_container = mu_get_container(ctx, addr);
-      if (mu_button(ctx, "send file")) {
-        tpool_add_work(tpool, send_file_path, ipc);
+      if (is_connection_established(data_context, addr) == 1) {
+        if (mu_button(ctx, "send file")) {
+          tpool_add_work(tpool, send_file_path, ipc);
+        }
+      } else {
+        if (mu_button(ctx, "establish connection")) {
+          request_p2p(ipc);
+        }
       }
       mu_end_window(ctx);
     }
@@ -118,8 +105,10 @@ void render_peer_addresses_selection(data_context_t *data_context,
 
 Color cast_color(mu_Color color) { return *(Color *)&color; }
 
-int main() {
-  ipc_state_t *ipc = initialize_shared_memory();
+
+
+int main(int argc, char *argv[]) {
+  ipc_state_t *ipc = initialize_shared_memory(argv + 1);
   if (ipc == NULL) {
     u_logger_error("ERROR: error initializing ipc\n");
     return 1;
@@ -128,15 +117,15 @@ int main() {
   mu_Context *ctx = malloc(sizeof(mu_Context));
   data_context_t *data_context = data_context_init();
   mu_init(ctx);
-  gtk_init();
   ctx->text_width = text_width;
   ctx->text_height = text_height;
   init_rendering();
-  thread_pool_t *tpool = create_tpool(4);
+  thread_pool_t *tpool = create_tpool(2);
 
   start_listener(ipc, tpool);
   char *ip_addrs_buffer = malloc(256);
 
+  SetTargetFPS(60);
   while (!WindowShouldClose()) {
     proccess_message_queue(data_context, ipc->message_queue, tpool);
 
@@ -168,27 +157,15 @@ int main() {
             mu_rect(10, 10, MAIN_WINDOW_WIDTH / 2, MAIN_WINDOW_HEIGHT / 2))) {
       mu_layout_row(ctx, 2, (int[]){60, -1}, 0);
 
-      mu_label(ctx, "First:");
       if (mu_button(ctx, "Request ip adresses")) {
-        command_message cmd_message = {.command_type = CMD_GET_IP_ADDRS,
-                                       .payload_size = 0};
-        send_ipc_command(cmd_message, ipc);
+        get_local_network_hosts(ipc);
         u_logger_info("Button1 pressed\n");
       }
 
-      mu_label(ctx, "Second:");
-      if (mu_button(ctx, "Button2")) {
-        mu_open_popup(ctx, "My Popup");
-      }
-
-      if (mu_begin_popup(ctx, "My Popup")) {
-        mu_label(ctx, "Hello world!");
-        mu_end_popup(ctx);
-      }
 
       render_host_addr(data_context, ctx);
       render_peer_addresses_selection(data_context, ctx);
-      render_address_panel(ctx, tpool, ipc, selected_addr);
+      render_address_panel(ctx, tpool, ipc, selected_addr, data_context);
 
       mu_end_window(ctx);
     }
@@ -203,7 +180,6 @@ int main() {
     mu_end(ctx);
 
     mu_Command *cmd = 0;
-    mu_next_command(ctx, &cmd);
     while (mu_next_command(ctx, &cmd)) {
       switch (cmd->type) {
       case MU_COMMAND_RECT: {
@@ -219,14 +195,12 @@ int main() {
         int w = cmd->clip.rect.w;
         int x = cmd->clip.rect.x;
         int y = cmd->clip.rect.y;
-        BeginScissorMode(x, y, w, h);
-        EndScissorMode();
+        // BeginScissorMode(x, y, w, h);
+        // EndScissorMode();
       }
       }
     }
 
-    while (g_main_context_iteration(NULL, false))
-      ;
     EndDrawing();
   }
   return 0;

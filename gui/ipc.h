@@ -14,7 +14,7 @@
 #include "data_context.h"
 #include "tpool.h"
 
-#define FILE_NAME "/mySharedMem"
+#define FILE_NAME "mySharedMem"
 #define ADRESS_SPACE_SIZE 1024 * 256
 
 #define Fblock_addr_space 0
@@ -51,6 +51,8 @@ typedef struct {
   control_block *back_cb;
   control_block *front_cb;
   message_queue_t *message_queue;
+  int serverEventFd;
+  int uiEventFd;
 } ipc_state_t;
 
 typedef struct ipc_command {
@@ -69,7 +71,8 @@ typedef struct ipc_get_addresses_command {
 enum command_types {
   CMD_GET_IP_ADDRS = 1,
   CMD_IDENTIFY_HOST = 2,
-  CMD_SEND_FILE_PATH = 3
+  CMD_SEND_FILE_PATH = 3,
+  CMD_REQUEST_P2P = 4
 };
 
 enum status {
@@ -86,7 +89,7 @@ typedef struct command_handler_t {
 void start_listener(ipc_state_t *ipc_state, thread_pool_t *tpool);
 int check_rw_status(ipc_state_t *ipc_state);
 void send_ipc_command(command_message cmdMsg, ipc_state_t *ipc_state);
-ipc_state_t *initialize_shared_memory();
+ipc_state_t *initialize_shared_memory(char *argv[]);
 
 void proccess_message_queue(data_context_t *data_context,
                             message_queue_t *message_queue,
@@ -94,3 +97,6 @@ void proccess_message_queue(data_context_t *data_context,
 
 command_handler_t *get_command_handler(data_context_t *data_context,
                                        int cmd_type, char *buffer);
+
+void request_p2p(ipc_state_t *ipc);
+void get_local_network_hosts(ipc_state_t *ipc);

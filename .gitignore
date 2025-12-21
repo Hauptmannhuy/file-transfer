@@ -3,7 +3,7 @@ main
 debug
 ips
 /gui/out
-/gui/microui
+/gui/dependencies/
 /gui/.vscode
 /gui/compile_commands.json
 /gui/.cache

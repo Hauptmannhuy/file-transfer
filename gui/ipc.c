@@ -1,10 +1,11 @@
 #include "ipc.h"
 #include "logger.h"
+#include <sys/eventfd.h>
 #include <inttypes.h>
 #include <string.h>
+#include <errno.h>
 
 #define uint32_size sizeof(uint32_t)
-
 #define SHIFT_OFFSET(offset_ptr, payload_size)                                 \
   ((*offset_ptr) += (payload_size) + (uint32_size * 2))
 
@@ -35,6 +36,19 @@ void send_ipc_command(command_message cmdMsg, ipc_state_t *ipcState) {
   u_logger_info("sending message with %d command_type, %d payload_size",
                 cmdMsg.command_type, cmdMsg.payload_size);
   u_logger_info("message payload \n %s", cmdMsg.payload);
+}
+
+
+void request_p2p(ipc_state_t *ipc) {
+  command_message cmd_message = {.command_type = CMD_REQUEST_P2P,
+                                       .payload_size = 0};
+  send_ipc_command(cmd_message, ipc);
+}
+
+void get_local_network_hosts(ipc_state_t *ipc) {
+  command_message cmd_message = {.command_type = CMD_GET_IP_ADDRS,
+                                       .payload_size = 0};
+  send_ipc_command(cmd_message, ipc);
 }
 
 int check_rw_status(ipc_state_t *ipc_state) {
@@ -78,15 +92,19 @@ void listen(void *ipc_state_arg) {
   u_logger_info("started listener...");
   ipc_state_t *ipc_state = (ipc_state_t *)ipc_state_arg;
   while (1) {
+    u_logger_info("START READING EVENT FD AND SLEEP");
+    eventfd_t read_counter;
+    int event = eventfd_read(ipc_state->serverEventFd, &read_counter);
+    if (event == -1) {
+      printf("eventfd_read failed: %s\n", strerror(errno));
+    }
+    u_logger_info("eventfd val return %d", read_counter);
     char *memory = ipc_state->front_cb->memory_block;
     uint32_t *offset = ipc_state->front_cb->write_offset;
     command_message cmd = {0};
-
+    
     char *start_ptr = memory + *offset;
     uint32_t message_type = *(uint32_t *)start_ptr;
-    if (message_type == 0) {
-      continue;
-    }
     uint32_t message_payload_size = *(uint32_t *)(start_ptr + uint32_size);
     char *ptr_to_payload = start_ptr + (uint32_size * 2);
     ptr_to_payload[message_payload_size] = '\0';
@@ -96,12 +114,6 @@ void listen(void *ipc_state_arg) {
     SHIFT_OFFSET(offset, message_payload_size);
     enqueue_message(cmd, ipc_state->message_queue);
   }
-}
-
-void *get_addresses(void *arg) {
-  ipc_get_addresses_command *cmd = (ipc_get_addresses_command *)arg;
-  // copy_to_buff(cmd->memory_ptr, cmd->buffer);
-  return NULL;
 }
 
 void start_listener(ipc_state_t *ipc_state, thread_pool_t *tpool) {
@@ -119,14 +131,22 @@ message_queue_t *init_message_queue() {
   return message_queue;
 }
 
-ipc_state_t *initialize_shared_memory() {
-  int fd = shm_open(FILE_NAME, O_CREAT | O_RDWR, 0666);
+ipc_state_t *initialize_shared_memory(char *eventFds[]) {
+  int serverFd = strtol(eventFds[0], NULL, 10);
+  int uiFd = strtol(eventFds[1], NULL, 10);
+  
+  char path[100] = "\0";
+
+  snprintf(path, sizeof(path), "/%s", FILE_NAME);
+  u_logger_info(path);
+  int fd = shm_open(path, O_RDWR, 0666);
   if (fd == -1) {
-    u_logger_error("error shm_open");
+    u_logger_error("error shm_open code: %d, reason: %s", errno, strerror(errno));
     return NULL;
   }
 
-  ftruncate(fd, ADRESS_SPACE_SIZE);
+
+  // ftruncate(fd, ADRESS_SPACE_SIZE);
 
   if (fd == -1) {
     u_logger_error("failed to create shared memory");
@@ -150,19 +170,11 @@ ipc_state_t *initialize_shared_memory() {
   back_cb->memory_block = memory_block + Bblock_addr_space;
   front_cb->memory_block = memory_block + Fblock_addr_space;
 
-  int offset_start = 10;
-
   uint32_t *ptr_start_read_offset_f = (uint32_t *)(front_cb->memory_block);
   uint32_t *ptr_start_write_offset_f = (uint32_t *)front_cb->memory_block + 1;
 
-  *ptr_start_write_offset_f = offset_start;
-  *ptr_start_read_offset_f = offset_start;
-
   uint32_t *ptr_start_read_offset_b = (uint32_t *)(back_cb->memory_block);
   uint32_t *ptr_start_write_offset_b = (uint32_t *)back_cb->memory_block + 1;
-
-  *ptr_start_write_offset_b = offset_start;
-  *ptr_start_read_offset_b = offset_start;
 
   back_cb->read_offset = ptr_start_read_offset_b;
   back_cb->write_offset = ptr_start_write_offset_b;
@@ -173,6 +185,8 @@ ipc_state_t *initialize_shared_memory() {
   ipc->back_cb = back_cb;
   ipc->front_cb = front_cb;
   ipc->memory = memory_block;
+  ipc->serverEventFd = serverFd;
+  ipc->uiEventFd = uiFd;
 
   ipc->message_queue = init_message_queue();
   return ipc;
