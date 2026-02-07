@@ -7,7 +7,7 @@
 #include "tpool.h"
 
 
-#include "microui/src/microui.h"
+#include "dependencies/microui/src/microui.h"
 #include "dependencies/libtinyfiledialogs/tinyfiledialogs.h"
 
 #define FONT_HEIGHT 10

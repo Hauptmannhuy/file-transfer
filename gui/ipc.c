@@ -1,9 +1,11 @@
 #include "ipc.h"
 #include "logger.h"
-#include <sys/eventfd.h>
-#include <inttypes.h>
-#include <string.h>
 #include <errno.h>
+#include <inttypes.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
 
 #define uint32_size sizeof(uint32_t)
 #define SHIFT_OFFSET(offset_ptr, payload_size)                                 \
@@ -27,27 +29,35 @@ void *worker(void *arg) {
   return NULL;
 }
 
-void send_ipc_command(command_message cmdMsg, ipc_state_t *ipcState) {
+char *move_destination_pointer(ipc_state_t *ipcState) {
   uint32_t write_offset = *ipcState->back_cb->write_offset;
   char *destination = ipcState->back_cb->memory_block + write_offset;
+  return destination;
+}
+
+void send_ipc_command(command_message cmdMsg, ipc_state_t *ipcState) {
+
+  char *destination = move_destination_pointer(ipcState);
+
   memcpy(destination, &cmdMsg.command_type, uint32_size);
   // copy payload size as the same size as cmd type as they both uint_32t
   memcpy(destination + uint32_size, &cmdMsg.payload_size, uint32_size);
+
+  eventfd_write(ipcState->uiEventFd, 1);
   u_logger_info("sending message with %d command_type, %d payload_size",
                 cmdMsg.command_type, cmdMsg.payload_size);
   u_logger_info("message payload \n %s", cmdMsg.payload);
 }
 
-
 void request_p2p(ipc_state_t *ipc) {
   command_message cmd_message = {.command_type = CMD_REQUEST_P2P,
-                                       .payload_size = 0};
+                                 .payload_size = 0};
   send_ipc_command(cmd_message, ipc);
 }
 
 void get_local_network_hosts(ipc_state_t *ipc) {
   command_message cmd_message = {.command_type = CMD_GET_IP_ADDRS,
-                                       .payload_size = 0};
+                                 .payload_size = 0};
   send_ipc_command(cmd_message, ipc);
 }
 
@@ -95,15 +105,17 @@ void listen(void *ipc_state_arg) {
     u_logger_info("START READING EVENT FD AND SLEEP");
     eventfd_t read_counter;
     int event = eventfd_read(ipc_state->serverEventFd, &read_counter);
+
     if (event == -1) {
-      printf("eventfd_read failed: %s\n", strerror(errno));
+      u_logger_error("eventfd_read failed: %s\n", strerror(errno));
     }
+
     u_logger_info("eventfd val return %d", read_counter);
-    char *memory = ipc_state->front_cb->memory_block;
+
     uint32_t *offset = ipc_state->front_cb->write_offset;
     command_message cmd = {0};
-    
-    char *start_ptr = memory + *offset;
+
+    char *start_ptr = ipc_state->front_cb->memory_block + *offset;
     uint32_t message_type = *(uint32_t *)start_ptr;
     uint32_t message_payload_size = *(uint32_t *)(start_ptr + uint32_size);
     char *ptr_to_payload = start_ptr + (uint32_size * 2);
@@ -134,17 +146,17 @@ message_queue_t *init_message_queue() {
 ipc_state_t *initialize_shared_memory(char *eventFds[]) {
   int serverFd = strtol(eventFds[0], NULL, 10);
   int uiFd = strtol(eventFds[1], NULL, 10);
-  
+
   char path[100] = "\0";
 
   snprintf(path, sizeof(path), "/%s", FILE_NAME);
   u_logger_info(path);
   int fd = shm_open(path, O_RDWR, 0666);
   if (fd == -1) {
-    u_logger_error("error shm_open code: %d, reason: %s", errno, strerror(errno));
+    u_logger_error("error shm_open code: %d, reason: %s", errno,
+                   strerror(errno));
     return NULL;
   }
-
 
   // ftruncate(fd, ADRESS_SPACE_SIZE);
 
@@ -227,15 +239,14 @@ void processes_ip_addrs_handler(void *command_handler_arg) {
   u_logger_info("buffer from received command %s", command_handler->buffer);
   int count = data_context->addr_capacity;
   char *result_buffer[count];
-  
 
-  int addr_count = copy_addrs_to_buffer(command_handler->buffer, result_buffer, count, ",");
-  for (int i = 0; i < count; i++)
-  {
+  int addr_count =
+      copy_addrs_to_buffer(command_handler->buffer, result_buffer, count, ",");
+  for (int i = 0; i < count; i++) {
     data_context->addrs_buffer[i] = init_conn_peer();
     data_context->addrs_buffer[i]->ip = result_buffer[i];
   }
-  
+
   free(command_handler->buffer);
   free(command_handler);
   data_context->addr_count = addr_count;

@@ -1,11 +1,11 @@
 compile:
-	gcc main.c dependencies/libtinyfiledialogs/tinyfiledialogs.c ipc.c logger.c tpool.c microui/src/microui.c data_context.c -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -o out
+	gcc main.c dependencies/libtinyfiledialogs/tinyfiledialogs.c ipc.c logger.c tpool.c dependencies/microui/src/microui.c data_context.c -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -o out
 
 sanitize-compile:
-	gcc main.c dependencies/libtinyfiledialogs/tinyfiledialogs.c ipc.c logger.c tpool.c microui/src/microui.c data_context.c -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -o out -fsanitize=address
+	gcc main.c dependencies/libtinyfiledialogs/tinyfiledialogs.c ipc.c logger.c tpool.c dependencies/microui/src/microui.c data_context.c -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -o out -fsanitize=address
 
 compile_debug:
-	gcc -g main.c dependencies/libtinyfiledialogs/tinyfiledialogs.c ipc.c logger.c tpool.c microui/src/microui.c data_context.c -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -o debug
+	gcc -g main.c dependencies/libtinyfiledialogs/tinyfiledialogs.c ipc.c logger.c tpool.c dependencies/microui/src/microui.c data_context.c -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 -o debug
 
 CC      := gcc
 CFLAGS  := -O2 -Wall
@@ -19,7 +19,7 @@ SRC := \
 	tpool.c \
 	data_context.c \
 	dependencies/libtinyfiledialogs/tinyfiledialogs.c \
-	microui/src/microui.c
+	dependencies/microui/src/microui.c
 
 
 TARGET := myapp

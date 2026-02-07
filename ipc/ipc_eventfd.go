@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"encoding/binary"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -22,6 +23,8 @@ func (fd eventfd) Read() (int, error) {
 	return syscall.Read(int(fd), buffer)
 }
 
-func (fd eventfd) Write(signal int) (int, error) {
-	return syscall.Write(int(fd), []byte{byte(signal)})
+func (fd eventfd) Write(signal uint64) (int, error) {
+	buffer := make([]byte, 8)
+	binary.NativeEndian.PutUint64(buffer, signal)
+	return syscall.Write(int(fd), buffer[:8])
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -241,24 +242,32 @@ func processIpcCmd(ipc *IPCstate, mutex *sync.Mutex, ipcCmd cmdMessage) {
 // TODO: think about how to actually use read and write offsets in communication protocol
 func (ipcState *IPCstate) Listen() {
 	for {
+		_, err := ipcState.uiEventFd.Read()
+		if err != nil {
+			logger.Log.Error("error signal to GUI eventfd", "error", slog.AnyValue(err))
+			os.Exit(1)
+		}
+
+		logger.Log.Info("received event from GUI")
+
 		offset := GetWriteOffset(ipcState.backBlock.memory)
-		msg, err := DecodeCommandMsg(ipcState.backBlock.memory, offset)
+		msg, err := decodeMessage(ipcState.backBlock.memory, offset)
 		if err != nil {
 			log.Fatal(err.Error())
 		}
 		if msg == nil {
 			continue
 		}
-		logger.Log.Info("decoded message type %d", msg.cmdType)
+		logger.Log.Info("decoded message", "cmd_type", msg.cmdType)
 		updateSize := getUpdateSize(msg)
-		logger.Log.Info("%d", updateSize)
+		logger.Log.Info("%d", "update_", updateSize)
 		UpdateWriteOffset(ipcState.backBlock.memory, updateSize)
 		ClearQueue(ipcState.backBlock.memory, offset, offset+updateSize)
 		ipcState.cmdHandler.Queue <- *msg
 	}
 }
 
-func DecodeCommandMsg(memory []byte, offset uint32) (*cmdMessage, error) {
+func decodeMessage(memory []byte, offset uint32) (*cmdMessage, error) {
 
 	commandType := ReadFourBytes(memory, offset)
 	payloadSize := ReadFourBytes(memory, offset+sizeOfUint32)
@@ -299,8 +308,7 @@ func UpdateWriteOffset(memory []byte, size uint32) {
 }
 
 func ClearQueue(memory []byte, offsetStart, offsetEnd uint32) {
-	logger.Log.Info("clear queue with offset start-end:", offsetStart, offsetEnd)
-	logger.Log.Info("memory size", len(memory))
+	logger.Log.Info("clear queue:", "offset_start", offsetStart, "offset_end", offsetEnd)
 	for i := offsetStart; i < offsetEnd; i++ {
 		memory[i] = 0
 	}
@@ -314,6 +322,12 @@ func (ipcState *IPCstate) sendMessage(message *cmdMessage) {
 	binary.NativeEndian.PutUint32(handler.Buffer[j:], message.cmdType)
 	binary.NativeEndian.PutUint32(handler.Buffer[j+4:], message.cmdPayloadSize)
 	copy(handler.Buffer[j+8:], message.payload)
+	// GUI listens to server with server event fd to handle events, so we write to server eventfd
+	_, err := ipcState.serverEventFd.Write(1)
+	if err != nil {
+		logger.Log.Error("error signal to GUI eventfd", "error", slog.AnyValue(err))
+	}
+	logger.Log.Info("message sent to GUI", "cmd_type", message.cmdType, "payload", string(message.payload))
 }
 
 func encodePayload(data any) []byte {

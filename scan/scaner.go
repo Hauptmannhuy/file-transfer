@@ -107,8 +107,6 @@ func arpScan(enInterface *net.Interface) []string {
 	logger.Log.Info("end arp")
 	logger.Log.Info("wait...")
 
-	client.SetReadDeadline(time.Now().Add(time.Millisecond * 30000))
-
 	for {
 		pack, _, err := client.Read()
 
@@ -117,6 +115,7 @@ func arpScan(enInterface *net.Interface) []string {
 			logger.Log.Info(err.Error())
 			if errors.As(err, &netError) {
 				if netError.Timeout() {
+					logger.Log.Info("break loop")
 					break
 				}
 			}
@@ -124,14 +123,15 @@ func arpScan(enInterface *net.Interface) []string {
 		logger.Log.Info("arp response")
 		client.SetReadDeadline(time.Now().Add(time.Millisecond * 3000))
 		invokedAddrs[pack.TargetIP.String()] = struct{}{}
+		logger.Log.Info("received arp address", "addr", pack.TargetIP.String())
 	}
 
-	keys := make([]string, 0, len(invokedAddrs))
+	ipAddrs := make([]string, 0, len(invokedAddrs))
 	for k := range invokedAddrs {
-		logger.Log.Debug("received addr %s", k)
-		keys = append(keys, k)
+		ipAddrs = append(ipAddrs, k)
 	}
-	return keys
+	logger.Log.Info("returning arp addresses", "result", ipAddrs)
+	return ipAddrs
 }
 
 // returns list of ip separated by comma
