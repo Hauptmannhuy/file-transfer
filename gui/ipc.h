@@ -48,8 +48,8 @@ typedef struct {
 typedef struct {
   char *memory;
   uintptr_t start_adress;
-  control_block *back_cb;
-  control_block *front_cb;
+  control_block *server_buffer;
+  control_block *gui_buffer;
   message_queue_t *message_queue;
   int serverEventFd;
   int uiEventFd;
@@ -87,7 +87,6 @@ typedef struct command_handler_t {
 } command_handler_t;
 
 void start_listener(ipc_state_t *ipc_state, thread_pool_t *tpool);
-int check_rw_status(ipc_state_t *ipc_state);
 void send_ipc_command(command_message cmdMsg, ipc_state_t *ipc_state);
 ipc_state_t *initialize_shared_memory(char *argv[]);
 

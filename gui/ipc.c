@@ -11,37 +11,18 @@
 #define SHIFT_OFFSET(offset_ptr, payload_size)                                 \
   ((*offset_ptr) += (payload_size) + (uint32_size * 2))
 
-void *worker(void *arg) {
-  struct ipc_command *command = (struct ipc_command *)arg;
-  printf("INFO: STARTED NEW WORKER\n");
-
-  int status = check_rw_status(command->ipc_state_t);
-  while (status == -1) {
-    status = check_rw_status(command->ipc_state_t);
-  }
-
-  command->handler(command->pointer_to_cmd);
-
-  free(command->pointer_to_cmd);
-  free(command);
-
-  printf("INFO: worker end\n");
-  return NULL;
-}
-
 char *move_destination_pointer(ipc_state_t *ipcState) {
-  uint32_t write_offset = *ipcState->back_cb->write_offset;
-  char *destination = ipcState->back_cb->memory_block + write_offset;
+  uint32_t write_offset = *ipcState->server_buffer->write_offset;
+  char *destination = ipcState->server_buffer->memory_block + write_offset;
   return destination;
 }
 
 void send_ipc_command(command_message cmdMsg, ipc_state_t *ipcState) {
-
   char *destination = move_destination_pointer(ipcState);
-
   memcpy(destination, &cmdMsg.command_type, uint32_size);
-  // copy payload size as the same size as cmd type as they both uint_32t
-  memcpy(destination + uint32_size, &cmdMsg.payload_size, uint32_size);
+  memcpy(destination + uint32_size, &cmdMsg.payload_size,
+         uint32_size); // copy payload size as the same size as cmd type as they
+                       // both uint_32t
 
   eventfd_write(ipcState->uiEventFd, 1);
   u_logger_info("sending message with %d command_type, %d payload_size",
@@ -59,14 +40,6 @@ void get_local_network_hosts(ipc_state_t *ipc) {
   command_message cmd_message = {.command_type = CMD_GET_IP_ADDRS,
                                  .payload_size = 0};
   send_ipc_command(cmd_message, ipc);
-}
-
-int check_rw_status(ipc_state_t *ipc_state) {
-  int rdwr_offset = ipc_state->back_cb->rdwr_status;
-  if (ipc_state->back_cb->memory_block[rdwr_offset] == READY_RDWR)
-    return 0;
-  if (ipc_state->back_cb->memory_block[rdwr_offset] == ACTIVE_RDWR)
-    return -1;
 }
 
 void proccess_message_queue(data_context_t *data_context,
@@ -98,6 +71,21 @@ int enqueue_message(command_message cmd, message_queue_t *queue) {
   }
 }
 
+command_message decode_message(ipc_state_t *ipc_state) {
+  command_message cmd = {0};
+  uint32_t *offset = ipc_state->gui_buffer->write_offset;
+  char *start_ptr = ipc_state->gui_buffer->memory_block + *offset;
+  uint32_t message_type = *(uint32_t *)start_ptr;
+
+  uint32_t message_payload_size = *(uint32_t *)(start_ptr + uint32_size);
+  char *ptr_to_payload = start_ptr + (uint32_size * 2);
+  ptr_to_payload[message_payload_size] = '\0';
+  cmd.command_type = message_type;
+  cmd.payload_size = message_payload_size;
+  cmd.payload = ptr_to_payload;
+  return cmd;
+}
+
 void listen(void *ipc_state_arg) {
   u_logger_info("started listener...");
   ipc_state_t *ipc_state = (ipc_state_t *)ipc_state_arg;
@@ -112,18 +100,8 @@ void listen(void *ipc_state_arg) {
 
     u_logger_info("eventfd val return %d", read_counter);
 
-    uint32_t *offset = ipc_state->front_cb->write_offset;
-    command_message cmd = {0};
-
-    char *start_ptr = ipc_state->front_cb->memory_block + *offset;
-    uint32_t message_type = *(uint32_t *)start_ptr;
-    uint32_t message_payload_size = *(uint32_t *)(start_ptr + uint32_size);
-    char *ptr_to_payload = start_ptr + (uint32_size * 2);
-    ptr_to_payload[message_payload_size] = '\0';
-    cmd.command_type = message_type;
-    cmd.payload_size = message_payload_size;
-    cmd.payload = ptr_to_payload;
-    SHIFT_OFFSET(offset, message_payload_size);
+    command_message cmd = decode_message(ipc_state);
+    SHIFT_OFFSET(ipc_state->gui_buffer->write_offset, cmd.payload_size);
     enqueue_message(cmd, ipc_state->message_queue);
   }
 }
@@ -141,6 +119,40 @@ message_queue_t *init_message_queue() {
   message_queue->head = 0;
   message_queue->tail = 0;
   return message_queue;
+}
+
+ipc_state_t *allocate_ipc(void *shm_addr, int serverFd, int uiEventFd) {
+  char *memory_block = (char *)shm_addr;
+
+  ipc_state_t *ipc = malloc(sizeof(ipc_state_t));
+
+  control_block *server_buffer = malloc(sizeof(control_block));
+  control_block *gui_buffer = malloc(sizeof(control_block));
+
+  server_buffer->memory_block = memory_block + Bblock_addr_space;
+  gui_buffer->memory_block = memory_block + Fblock_addr_space;
+
+  uint32_t *ptr_start_read_offset_f = (uint32_t *)(gui_buffer->memory_block);
+  uint32_t *ptr_start_write_offset_f = (uint32_t *)gui_buffer->memory_block + 1;
+
+  uint32_t *ptr_start_read_offset_b = (uint32_t *)(server_buffer->memory_block);
+  uint32_t *ptr_start_write_offset_b =
+      (uint32_t *)server_buffer->memory_block + 1;
+
+  server_buffer->read_offset = ptr_start_read_offset_b;
+  server_buffer->write_offset = ptr_start_write_offset_b;
+
+  gui_buffer->read_offset = ptr_start_read_offset_f;
+  gui_buffer->write_offset = ptr_start_write_offset_f;
+
+  ipc->server_buffer = server_buffer;
+  ipc->gui_buffer = gui_buffer;
+  ipc->memory = memory_block;
+  ipc->serverEventFd = serverFd;
+  ipc->uiEventFd = uiEventFd;
+
+  ipc->message_queue = init_message_queue();
+  return ipc;
 }
 
 ipc_state_t *initialize_shared_memory(char *eventFds[]) {
@@ -166,42 +178,13 @@ ipc_state_t *initialize_shared_memory(char *eventFds[]) {
   };
   u_logger_info("created shared memory");
 
-  void *addr =
+  void *shm_addr =
       mmap(NULL, ADRESS_SPACE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  if (addr == NULL) {
+  if (shm_addr == NULL) {
     return NULL;
   }
 
-  char *memory_block = (char *)addr;
-
-  ipc_state_t *ipc = malloc(sizeof(ipc_state_t));
-
-  control_block *back_cb = malloc(sizeof(control_block));
-  control_block *front_cb = malloc(sizeof(control_block));
-
-  back_cb->memory_block = memory_block + Bblock_addr_space;
-  front_cb->memory_block = memory_block + Fblock_addr_space;
-
-  uint32_t *ptr_start_read_offset_f = (uint32_t *)(front_cb->memory_block);
-  uint32_t *ptr_start_write_offset_f = (uint32_t *)front_cb->memory_block + 1;
-
-  uint32_t *ptr_start_read_offset_b = (uint32_t *)(back_cb->memory_block);
-  uint32_t *ptr_start_write_offset_b = (uint32_t *)back_cb->memory_block + 1;
-
-  back_cb->read_offset = ptr_start_read_offset_b;
-  back_cb->write_offset = ptr_start_write_offset_b;
-
-  front_cb->read_offset = ptr_start_read_offset_f;
-  front_cb->write_offset = ptr_start_write_offset_f;
-
-  ipc->back_cb = back_cb;
-  ipc->front_cb = front_cb;
-  ipc->memory = memory_block;
-  ipc->serverEventFd = serverFd;
-  ipc->uiEventFd = uiFd;
-
-  ipc->message_queue = init_message_queue();
-  return ipc;
+  return allocate_ipc(shm_addr, serverFd, uiFd);
 }
 
 int copy_addrs_to_buffer(char *buffer, char **result_buffer,

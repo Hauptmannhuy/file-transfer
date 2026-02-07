@@ -23,8 +23,8 @@ type IPCstate struct {
 	MemoryBlock      []byte
 	cmdHandler       cmdHandler
 	networkBridge    bridge.Bridge
-	frontBlock       controlBlock
-	backBlock        controlBlock
+	guiBuffer        controlBlock
+	serverBuffer     controlBlock
 	uiEventFd        eventfd
 	serverEventFd    eventfd
 	ShmFile          *os.File
@@ -57,15 +57,6 @@ const (
 )
 
 type cmdAddr uint8
-
-const (
-	CMD_RW_STATUS_ADRESS cmdAddr = 1
-)
-
-const (
-	statusRW   int = 2
-	statusIdle int = 0
-)
 
 type ClientCommand struct {
 	cmdEnum bridge.ClientCmdEnum
@@ -163,8 +154,8 @@ func InitIPC(bridge bridge.Bridge) (*IPCstate, error) {
 			Buffer: block,
 		},
 		networkBridge: bridge,
-		frontBlock:    fblockControl,
-		backBlock:     bblockControl,
+		guiBuffer:     fblockControl,
+		serverBuffer:  bblockControl,
 		ShmFile:       f,
 		serverEventFd: serverEventFd,
 		uiEventFd:     uiEventFd,
@@ -235,7 +226,6 @@ func processIpcCmd(ipc *IPCstate, mutex *sync.Mutex, ipcCmd cmdMessage) {
 	}
 	responseMsg := newMessage(ipcCmd.cmdType, buffer)
 	ipc.sendMessage(responseMsg)
-	ipc.MemoryBlock[CMD_RW_STATUS_ADRESS] = byte(statusIdle)
 	mutex.Unlock()
 }
 
@@ -250,8 +240,8 @@ func (ipcState *IPCstate) Listen() {
 
 		logger.Log.Info("received event from GUI")
 
-		offset := GetWriteOffset(ipcState.backBlock.memory)
-		msg, err := decodeMessage(ipcState.backBlock.memory, offset)
+		offset := GetWriteOffset(ipcState.serverBuffer.memory)
+		msg, err := decodeMessage(ipcState.serverBuffer.memory, offset)
 		if err != nil {
 			log.Fatal(err.Error())
 		}
@@ -261,8 +251,8 @@ func (ipcState *IPCstate) Listen() {
 		logger.Log.Info("decoded message", "cmd_type", msg.cmdType)
 		updateSize := getUpdateSize(msg)
 		logger.Log.Info("%d", "update_", updateSize)
-		UpdateWriteOffset(ipcState.backBlock.memory, updateSize)
-		ClearQueue(ipcState.backBlock.memory, offset, offset+updateSize)
+		UpdateWriteOffset(ipcState.serverBuffer.memory, updateSize)
+		ClearQueue(ipcState.serverBuffer.memory, offset, offset+updateSize)
 		ipcState.cmdHandler.Queue <- *msg
 	}
 }
@@ -316,7 +306,7 @@ func ClearQueue(memory []byte, offsetStart, offsetEnd uint32) {
 }
 
 func (ipcState *IPCstate) sendMessage(message *cmdMessage) {
-	offset := GetWriteOffset(ipcState.frontBlock.memory)
+	offset := GetWriteOffset(ipcState.guiBuffer.memory)
 	handler := ipcState.cmdHandler
 	j := int(offset)
 	binary.NativeEndian.PutUint32(handler.Buffer[j:], message.cmdType)
@@ -357,5 +347,5 @@ func (ipcState *IPCstate) identifyHost(localHostAddr *net.IPNet) {
 	buffer := encodePayload(addr)
 	message := newMessage(uint32(bridge.CmdIdentifyHost), buffer)
 	ipcState.sendMessage(message)
-	UpdateWriteOffset(ipcState.backBlock.memory, getUpdateSize(message))
+	UpdateWriteOffset(ipcState.serverBuffer.memory, getUpdateSize(message))
 }
