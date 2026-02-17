@@ -22,7 +22,6 @@
 #define CONTROL_BLOCK_SIZE 16
 #define message_queue_capacity 256
 
-// TODO: think about how to pass user data to back
 typedef struct {
   uint32_t command_type;
   uint32_t payload_size;
@@ -72,7 +71,9 @@ enum command_types {
   CMD_GET_IP_ADDRS = 1,
   CMD_IDENTIFY_HOST = 2,
   CMD_SEND_FILE_PATH = 3,
-  CMD_REQUEST_P2P = 4
+  CMD_REQUEST_P2P = 4,
+  CMD_RESPONSE_P2P = 5,
+  CMD_ACCEPT_P2P = 6
 };
 
 enum status {
@@ -97,5 +98,5 @@ void proccess_message_queue(data_context_t *data_context,
 command_handler_t *get_command_handler(data_context_t *data_context,
                                        int cmd_type, char *buffer);
 
-void request_p2p(ipc_state_t *ipc);
+void request_p2p(ipc_state_t *ipc, char *peer_ip);
 void get_local_network_hosts(ipc_state_t *ipc);

@@ -1,7 +1,6 @@
 package scaner
 
 import (
-	"errors"
 	"file-transfer/logger"
 	"fmt"
 	"log"
@@ -9,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -86,17 +86,48 @@ func getNetInterface() *net.Interface {
 	return nil
 }
 
+func getSubnetIP(enInterface *net.Interface) (*net.IPNet, error) {
+	addrs, err := enInterface.Addrs()
+	if err != nil {
+		return nil, err
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil && ipnet.IP.IsPrivate() {
+			return ipnet, nil
+		}
+	}
+	return nil, nil
+}
+
 func arpScan(enInterface *net.Interface) []string {
 	invokedAddrs := map[string]struct{}{}
 	client, err := arp.Dial(enInterface)
 	if err != nil {
-		log.Fatal(err)
+		logger.Log.Error(err.Error())
 	}
+
+	subnetIp, err := getSubnetIP(enInterface)
+	var addrBuffer [4]byte
+	splitted := strings.Split(subnetIp.IP.String(), ".")
+	for i := range 3 {
+		nIP, _ := strconv.Atoi(splitted[i])
+		if err != nil {
+			logger.Log.Error(err.Error())
+		}
+		addrBuffer[i] = byte(nIP)
+	}
+
+	if err != nil {
+		logger.Log.Error(err.Error())
+	}
+
 	wait := sync.WaitGroup{}
 	wait.Add(1)
 	logger.Log.Info("start arp")
-	for i := 0; i < 255; i++ {
-		addr := netip.AddrFrom4([4]byte{192, 168, 1, byte(i)})
+
+	for i := range 255 {
+		addrBuffer[3] = byte(i)
+		addr := netip.AddrFrom4(addrBuffer)
 		err := client.Request(addr)
 
 		if err != nil {
@@ -107,23 +138,32 @@ func arpScan(enInterface *net.Interface) []string {
 	logger.Log.Info("end arp")
 	logger.Log.Info("wait...")
 
+	timer := time.NewTimer(time.Second * 3)
+
+	var timeout bool
+	go func() {
+		<-timer.C
+		timeout = true
+	}()
+
 	for {
 		pack, _, err := client.Read()
 
-		if err != nil {
-			var netError net.Error
-			logger.Log.Info(err.Error())
-			if errors.As(err, &netError) {
-				if netError.Timeout() {
-					logger.Log.Info("break loop")
-					break
-				}
-			}
-		}
 		logger.Log.Info("arp response")
-		client.SetReadDeadline(time.Now().Add(time.Millisecond * 3000))
+
+		if err != nil {
+			logger.Log.Error(err.Error())
+		}
+
 		invokedAddrs[pack.TargetIP.String()] = struct{}{}
 		logger.Log.Info("received arp address", "addr", pack.TargetIP.String())
+		timer.Reset(time.Second * 3)
+
+		if timeout {
+			logger.Log.Info("break loop")
+			break
+		}
+
 	}
 
 	ipAddrs := make([]string, 0, len(invokedAddrs))
@@ -221,12 +261,12 @@ func GetLocalHostAddr() *net.IPNet {
 	}
 	var localAddr *net.IPNet
 	for _, addr := range addrs {
-		if ip, ok := addr.(*net.IPNet); ok && !ip.IP.IsLoopback() && ip.IP.To4() != nil {
-			localAddr = ip
+
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil && ipnet.IP.IsPrivate() {
+			localAddr = ipnet
 			break
 		}
 	}
-	// fmt.Println("local address is ", localAddr.IP.String())
 	return localAddr
 }
 
@@ -243,7 +283,6 @@ func (pipe *syncPipeChannel) processAddresses() {
 	for {
 		select {
 		case addr := <-pipe.addrChan:
-			// fmt.Println("match")
 			if !slices.Contains(pipe.addresses, addr) {
 				pipe.addresses = append(pipe.addresses, addr)
 			}

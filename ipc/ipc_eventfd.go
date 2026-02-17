@@ -9,7 +9,7 @@ import (
 
 type eventfd int
 
-func initEventFd() (eventfd, error) {
+func InitEventFd() (eventfd, error) {
 	fd, err := unix.Eventfd(0, 0)
 	if err != nil {
 		return 0, err

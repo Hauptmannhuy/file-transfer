@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-const defaultPort uint16 = 6070
-const connectPort uint16 = 6071
+const listenerPort uint16 = 6071
+const requestPort uint16 = 6070
 
 type clientNetMsgType uint8
 
@@ -54,13 +54,21 @@ type p2pMessage struct {
 
 type P2Pserver struct {
 	connections   map[string]peerConn
+	waitableConn  map[string]peerConn
 	eventHandlers eventHandlerMap
 	memoryBridge  bridge.Bridge
+}
+
+type errHandshakeRefused string
+
+func (err errHandshakeRefused) String() string {
+	return string(err)
 }
 
 func InitServer(bridge bridge.Bridge) P2Pserver {
 	server := P2Pserver{
 		connections:  map[string]peerConn{},
+		waitableConn: map[string]peerConn{},
 		memoryBridge: bridge,
 	}
 	server.eventHandlers = attachEventHandlers(server)
@@ -68,13 +76,12 @@ func InitServer(bridge bridge.Bridge) P2Pserver {
 }
 
 func (server P2Pserver) ProccessQueue() {
-	for message := range server.memoryBridge.Get() {
-		log.Println("received message from memory part")
+	for msg := range server.memoryBridge.Get() {
+		logger.Log.Info("received message from memory bridge to server endpoint with payload", "msg_peer", msg.PeerID, "msg_request_p2p", msg.RequestP2P, "msg_send_file_data", msg.SendFileData, "msg_err", msg.Err)
 		response := bridge.BridgeMessage{}
-		handler := server.eventHandlers[message.Type]
-		if err := handler(*message, response); err != nil {
+		handler := server.eventHandlers[msg.Type]
+		if err := handler(*msg, response); err != nil {
 			response.Err = err
-			logger.Log.Error(err.Error())
 		}
 
 		server.memoryBridge.Send(&response)
@@ -105,8 +112,21 @@ func (server P2Pserver) handleSendFile(request bridge.BridgeMessage, response br
 }
 
 func (server P2Pserver) handleConnectToPeer(request bridge.BridgeMessage, response bridge.BridgeMessage) error {
+	var err error
 	ip := *request.RequestP2P
-	return server.ConnectToPeer(ip)
+	if err = server.ConnectToPeer(ip); err != nil {
+		logger.Log.Error("error in connect to peer handler", "error", err.Error())
+	} else {
+		logger.Log.Info("handler connect to peer succesfully finished")
+	}
+	return err
+}
+
+func (server P2Pserver) AcceptP2P(ip string) {
+	server.memoryBridge.Send(&bridge.BridgeMessage{
+		Type:       bridge.AcceptP2P,
+		RequestP2P: &ip,
+	})
 }
 func (server P2Pserver) Listen() {
 	go server.ProccessQueue()
@@ -117,16 +137,16 @@ func (server P2Pserver) Listen() {
 	}
 
 	for {
-		var incomingPeer string
 		conn, err := listener.AcceptTCP()
+		logger.Log.Info("Incoming P2P request from", "ip", conn.RemoteAddr().String())
 		if err != nil {
-			log.Fatal(err)
+			logger.Log.Error("error accept tcp", "err", err.Error())
 		}
 
 		ipAddr := conn.RemoteAddr().String()
 		peer := newPeerConn(ipAddr, conn)
-		runSession(peer)
-		fmt.Printf("request from %s\n", incomingPeer)
+		server.waitableConn[ipAddr] = peer
+		server.AcceptP2P(ipAddr)
 	}
 }
 
@@ -136,52 +156,66 @@ func initListener() (*net.TCPListener, error) {
 	if err != nil {
 		return nil, err
 	}
-	laddr := net.TCPAddrFromAddrPort(netip.AddrPortFrom(ipAddr, defaultPort))
+	laddr := net.TCPAddrFromAddrPort(netip.AddrPortFrom(ipAddr, listenerPort))
 	listener, err := net.ListenTCP("tcp", laddr)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Printf("listening on %s\n", laddr.String())
+	logger.Log.Info("listener initialized on", "ip", localAddr.IP.String())
 	return listener, nil
 }
 
 func (server P2Pserver) ConnectToPeer(ipStr string) error {
+	logger.Log.Info(ipStr)
 	var ip net.IP = net.ParseIP(ipStr)
 	var raddr *net.TCPAddr
 	var laddr *net.TCPAddr
 	var err error
+	listenerPort := strconv.Itoa(int(listenerPort))
+	// requestPort := strconv.Itoa(int(requestPort))
 
-	port := strconv.Itoa(int(defaultPort))
-
-	raddr, err = net.ResolveTCPAddr("tcp", ip.String()+":"+port)
+	raddr, err = net.ResolveTCPAddr("tcp", ip.String()+":"+listenerPort)
 	if err != nil {
+		logger.Log.Error("error resolving raddr", "ip", ip.String(), "error", err.Error())
 		return err
 	}
 
-	laddr, err = net.ResolveTCPAddr("tcp", scaner.GetLocalHostAddr().IP.String()+":"+strconv.Itoa(int(connectPort)))
-	if err != nil {
-		return err
-	}
+	// laddr, err = net.ResolveTCPAddr("tcp", scaner.GetLocalHostAddr().IP.String())
+	// if err != nil {
+	// 	logger.Log.Error("error resolving laddr", "ip", ip.String(), "error", err.Error())
+	// 	return err
+	// }
 	fmt.Printf("requesting from %s to %s\n", laddr.String(), raddr.String())
-	conn, err := net.DialTCP("tcp", laddr, raddr)
+	conn, err := net.DialTCP("tcp", nil, raddr)
 	var peer peerConn
+	var netError net.Error
 	if err == nil {
-		ok, err := server.requestHandshake(conn)
+		logger.Log.Info("dial tcp is successfull..?")
+		err := server.requestHandshake(conn)
 		if err != nil {
+			logger.Log.Error(err.Error())
+			if err := conn.Close(); err != nil {
+				logger.Log.Error(err.Error())
+			}
 			return err
-		} else if !ok {
-			return errors.New("request handshake is failed due to unknown reason")
 		}
 
 		peer = newPeerConn(ip.String(), conn)
 		runSession(peer)
 		server.connections[ip.String()] = peer
+	} else {
+		if errors.As(err, &netError) {
+			if netError.Timeout() {
+				logger.Log.Info("error dial tcp is occuring most likely due to firewall blocking port, check your settings and try again", "port", listenerPort)
+			}
+		}
 	}
+	logger.Log.Error(err.Error())
 	return err
 }
 
-func (server P2Pserver) requestHandshake(conn *net.TCPConn) (bool, error) {
+func (server P2Pserver) requestHandshake(conn *net.TCPConn) error {
 	var buffer []byte = make([]byte, 64)
 	var netError net.Error
 	var response p2pMessage
@@ -189,38 +223,40 @@ func (server P2Pserver) requestHandshake(conn *net.TCPConn) (bool, error) {
 	msg := p2pMessage{
 		Type: MsgHandshake,
 	}
+
 	bytes, err := json.Marshal(msg)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	if _, err = conn.Write(bytes); err != nil {
-		return false, err
+		return err
 	}
 
-	if err = conn.SetReadDeadline(time.Now().Add(time.Second * 30)); err != nil {
-		return false, err
+	if err = conn.SetReadDeadline(time.Now().Add(time.Second * 15)); err != nil {
+		return err
 	}
 
 	_, err = conn.Read(buffer)
 	if err != nil && errors.As(err, &netError) {
+		logger.Log.Error("error during conn read", "error", err)
 		if netError.Timeout() {
-			return false, fmt.Errorf("timeout during p2p request handshake")
+			return fmt.Errorf("timeout during p2p request handshake")
 		}
 	}
 
 	if err = json.Unmarshal(buffer, &response); err != nil {
-		return false, err
+		return err
 	}
 
 	switch response.Type {
 	case MsgOk:
-		return true, nil
+		return nil
 	case msgRefused:
-		return false, errors.New("peer refused connection")
+		return errors.New("peer refused connection")
 	}
 
-	return false, fmt.Errorf("unknown error, response message has undefined type %s", response.Type)
+	return fmt.Errorf("unknown error, response message has undefined type %s", response.Type)
 }
 
 func (server P2Pserver) SignalPeer(message bridge.BridgeMessage) error {
@@ -248,8 +284,14 @@ func runSession(peer peerConn) {
 				log.Println(err)
 				os.Exit(1)
 			}
-			fmt.Println("readed ", n, "bytes")
-			fmt.Println("parsing...")
+			if n > 0 {
+				var incomingMsg clientNetMsg
+				err := json.Unmarshal(buffer, &incomingMsg)
+				if err != nil {
+					logger.Log.Error("error decoding p2p message", "err", err.Error())
+				}
+				logger.Log.Info("recevied message from peer")
+			}
 		}
 	}()
 

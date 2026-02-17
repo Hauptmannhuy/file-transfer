@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -27,7 +28,10 @@ type IPCstate struct {
 	serverBuffer     controlBlock
 	uiEventFd        eventfd
 	serverEventFd    eventfd
+	guiProcess       *os.Process
 	ShmFile          *os.File
+
+	guiDispatch chan *cmdMessage
 }
 
 type controlBlock struct {
@@ -77,11 +81,17 @@ func newMessage(cmdType uint32, payload []byte) *cmdMessage {
 	}
 }
 
+type InitConfigIPC struct {
+	ServerEventFd eventfd
+	GuiEventFd    eventfd
+	Bridge        bridge.Bridge
+}
+
 var ClientCommands []bridge.ClientCmdEnum = []bridge.ClientCmdEnum{
 	bridge.CmdRequestAddresses,
 }
 
-func InitIPC(bridge bridge.Bridge) (*IPCstate, error) {
+func InitIPC(config InitConfigIPC) (*IPCstate, error) {
 	f, err := os.OpenFile(filepath.Join("/dev/shm/", filename), os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		return nil, fmt.Errorf("error creating fd for shared memory segment, %s", err.Error())
@@ -121,19 +131,8 @@ func InitIPC(bridge bridge.Bridge) (*IPCstate, error) {
 		*ptr = uint32(offsetStart)
 	}
 
-	serverEventFd, err := initEventFd()
-	if err != nil {
-		return nil, err
-	}
-
-	uiEventFd, err := initEventFd()
-	if err != nil {
-		return nil, err
-	}
-	fmt.Println(serverEventFd, uiEventFd)
-
-	serverFd := os.NewFile(uintptr(serverEventFd), "server_fd")
-	uiFd := os.NewFile(uintptr(uiEventFd), "ui_fd")
+	serverFd := os.NewFile(uintptr(config.ServerEventFd), "server_fd")
+	uiFd := os.NewFile(uintptr(config.GuiEventFd), "ui_fd")
 
 	cmd := exec.Command("./gui/out", "3", "4")
 	cmd.ExtraFiles = []*os.File{serverFd, uiFd}
@@ -146,6 +145,12 @@ func InitIPC(bridge bridge.Bridge) (*IPCstate, error) {
 		return nil, err
 	}
 
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			logger.Log.Error("GUI exited with an error", "error", err.Error())
+		}
+	}()
+
 	ipc := &IPCstate{
 		AddressSpaceSize: memoryBlockSize,
 		MemoryBlock:      block,
@@ -153,43 +158,93 @@ func InitIPC(bridge bridge.Bridge) (*IPCstate, error) {
 			Queue:  make(chan cmdMessage),
 			Buffer: block,
 		},
-		networkBridge: bridge,
+		networkBridge: config.Bridge,
 		guiBuffer:     fblockControl,
 		serverBuffer:  bblockControl,
 		ShmFile:       f,
-		serverEventFd: serverEventFd,
-		uiEventFd:     uiEventFd,
+		serverEventFd: config.ServerEventFd,
+		uiEventFd:     config.GuiEventFd,
+		guiProcess:    cmd.Process,
+		guiDispatch:   make(chan *cmdMessage),
 	}
 
+	go ipc.dispatchToGUI()
 	ipc.identifyHost(scaner.GetLocalHostAddr())
 	return ipc, nil
+}
+
+func (ipc *IPCstate) dispatchToGUI() {
+	for msg := range ipc.guiDispatch {
+		offset := GetWriteOffset(ipc.guiBuffer.memory)
+		handler := ipc.cmdHandler
+		j := int(offset)
+		binary.NativeEndian.PutUint32(handler.Buffer[j:], msg.cmdType)
+		binary.NativeEndian.PutUint32(handler.Buffer[j+4:], msg.cmdPayloadSize)
+		copy(handler.Buffer[j+8:], msg.payload)
+		// GUI listens to server with server event fd to handle events, so we write to server eventfd
+		_, err := ipc.serverEventFd.Write(1)
+		if err != nil {
+			logger.Log.Error("error signal to GUI eventfd", "error", slog.AnyValue(err))
+		}
+		logger.Log.Info("message sent to GUI", "cmd_type", msg.cmdType, "payload", string(msg.payload))
+		UpdateWriteOffset(ipc.serverBuffer.memory, getUpdateSize(msg))
+	}
+}
+
+func (ipc *IPCstate) WatchGUIhealth(exitSignal chan os.Signal) {
+	state, err := ipc.guiProcess.Wait()
+	if err != nil {
+		logger.Log.Error("GUI exited with an errror", "error_code", state.ExitCode(), "state", state.String())
+		exitSignal <- syscall.SIGTERM
+	}
 }
 
 func UnlinkShmMem() error {
 	err := os.Remove(filepath.Join("/dev/shm/", filename))
 	if err != nil {
-		logger.Log.Error(err.Error())
 		return err
 	}
 	logger.Log.Info("unlinking shared memory")
 	return nil
 }
 
-func (ipcState *IPCstate) ProccessQueue() {
-	ipcHandler := ipcState.cmdHandler
+func CloseEventFds(config InitConfigIPC) error {
+	var errs []error
+
+	if err := syscall.Close(int(config.GuiEventFd)); err != nil {
+		errs = append(errs, err)
+	}
+
+	if err := syscall.Close(int(config.ServerEventFd)); err != nil {
+		errs = append(errs, err)
+	}
+
+	return errors.Join(errs...)
+}
+
+func (ipc *IPCstate) ProccessQueue() {
+	ipcHandler := ipc.cmdHandler
 	mutex := &sync.Mutex{}
 	for {
 		select {
 		case ipcCmd := <-ipcHandler.Queue:
-			processIpcCmd(ipcState, mutex, ipcCmd)
-		case <-ipcState.networkBridge.Get():
+			ipc.processIpcCmd(mutex, ipcCmd)
+		case netBridgeMsg := <-ipc.networkBridge.Get():
 			log.Println("received message from net")
+			ipc.processNetCmd(netBridgeMsg)
 		}
 
 	}
 }
 
-func processIpcCmd(ipc *IPCstate, mutex *sync.Mutex, ipcCmd cmdMessage) {
+func (ipc *IPCstate) processNetCmd(netBridgeMsg *bridge.BridgeMessage) {
+	switch netBridgeMsg.Type {
+	case bridge.AcceptP2P:
+		ipc.guiDispatch <- newMessage(uint32(netBridgeMsg.Type), []byte(*netBridgeMsg.RequestP2P))
+	}
+}
+
+func (ipc *IPCstate) processIpcCmd(mutex *sync.Mutex, ipcCmd cmdMessage) {
 	mutex.Lock()
 	var data any
 
@@ -199,8 +254,8 @@ func processIpcCmd(ipc *IPCstate, mutex *sync.Mutex, ipcCmd cmdMessage) {
 	case bridge.CmdRequestAddresses:
 		data = scaner.Scan()
 	case bridge.CmdRequestP2P:
-		log.Println("sending message to network")
 		ip := string(ipcCmd.payload)
+		logger.Log.Info("bridge.CmdRequestP2P", "ip", ip)
 		ipc.networkBridge.Send(&bridge.BridgeMessage{
 			RequestP2P: &ip,
 			Type:       clientCmdType,
@@ -223,13 +278,12 @@ func processIpcCmd(ipc *IPCstate, mutex *sync.Mutex, ipcCmd cmdMessage) {
 	var buffer []byte
 	if data != nil {
 		buffer = encodePayload(data)
+		responseMsg := newMessage(ipcCmd.cmdType, buffer)
+		ipc.guiDispatch <- responseMsg
 	}
-	responseMsg := newMessage(ipcCmd.cmdType, buffer)
-	ipc.sendMessage(responseMsg)
 	mutex.Unlock()
 }
 
-// TODO: think about how to actually use read and write offsets in communication protocol
 func (ipcState *IPCstate) Listen() {
 	for {
 		_, err := ipcState.uiEventFd.Read()
@@ -258,21 +312,22 @@ func (ipcState *IPCstate) Listen() {
 }
 
 func decodeMessage(memory []byte, offset uint32) (*cmdMessage, error) {
-
 	commandType := ReadFourBytes(memory, offset)
 	payloadSize := ReadFourBytes(memory, offset+sizeOfUint32)
 	var messagePayload []byte = make([]byte, payloadSize)
 	payloadOffsetStart := offset + (sizeOfUint32 * 2)
 	payloadOffsetEnd := payloadOffsetStart + payloadSize
 	copy(messagePayload, memory[payloadOffsetStart:payloadOffsetEnd])
-
 	if (commandType | payloadSize) == 0 {
 		return nil, nil
 	}
+
 	if commandType == 0 && payloadSize > 0 {
 		return nil, fmt.Errorf("invalid message: size=%d but type=0", payloadSize)
 	}
-	newMessage(commandType, nil)
+
+	logger.Log.Info("decoded message from GUI", "commandType", commandType, "payload size", payloadSize, "payload", string(messagePayload))
+
 	return &cmdMessage{
 		cmdType:        commandType,
 		cmdPayloadSize: payloadSize,
@@ -305,21 +360,6 @@ func ClearQueue(memory []byte, offsetStart, offsetEnd uint32) {
 	logger.Log.Info("queue cleared")
 }
 
-func (ipcState *IPCstate) sendMessage(message *cmdMessage) {
-	offset := GetWriteOffset(ipcState.guiBuffer.memory)
-	handler := ipcState.cmdHandler
-	j := int(offset)
-	binary.NativeEndian.PutUint32(handler.Buffer[j:], message.cmdType)
-	binary.NativeEndian.PutUint32(handler.Buffer[j+4:], message.cmdPayloadSize)
-	copy(handler.Buffer[j+8:], message.payload)
-	// GUI listens to server with server event fd to handle events, so we write to server eventfd
-	_, err := ipcState.serverEventFd.Write(1)
-	if err != nil {
-		logger.Log.Error("error signal to GUI eventfd", "error", slog.AnyValue(err))
-	}
-	logger.Log.Info("message sent to GUI", "cmd_type", message.cmdType, "payload", string(message.payload))
-}
-
 func encodePayload(data any) []byte {
 	var length int
 
@@ -346,6 +386,6 @@ func (ipcState *IPCstate) identifyHost(localHostAddr *net.IPNet) {
 	addr := localHostAddr.IP.String()
 	buffer := encodePayload(addr)
 	message := newMessage(uint32(bridge.CmdIdentifyHost), buffer)
-	ipcState.sendMessage(message)
-	UpdateWriteOffset(ipcState.serverBuffer.memory, getUpdateSize(message))
+	ipcState.guiDispatch <- message
+
 }

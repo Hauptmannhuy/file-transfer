@@ -8,6 +8,7 @@ const (
 	CmdSendFile
 	CmdRequestP2P
 	CmdResponseP2P
+	AcceptP2P
 )
 
 var clientCmdNames = map[ClientCmdEnum]string{
@@ -16,6 +17,7 @@ var clientCmdNames = map[ClientCmdEnum]string{
 	CmdSendFile:         "SendFile",
 	CmdRequestP2P:       "RequestP2P",
 	CmdResponseP2P:      "ResponseP2P",
+	AcceptP2P:           "AcceptP2P",
 }
 
 func (c ClientCmdEnum) String() string {

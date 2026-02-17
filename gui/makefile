@@ -22,7 +22,7 @@ SRC := \
 	dependencies/microui/src/microui.c
 
 
-TARGET := myapp
+TARGET := out
 DIST   := dist
 
 .PHONY: all clean dist

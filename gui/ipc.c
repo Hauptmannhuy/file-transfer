@@ -1,8 +1,13 @@
 #include "ipc.h"
+#include "data_context.h"
 #include "logger.h"
+#include "tpool.h"
 #include <errno.h>
 #include <inttypes.h>
+#include <raylib.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
@@ -11,28 +16,55 @@
 #define SHIFT_OFFSET(offset_ptr, payload_size)                                 \
   ((*offset_ptr) += (payload_size) + (uint32_size * 2))
 
-char *move_destination_pointer(ipc_state_t *ipcState) {
+char *get_destination_pointer(ipc_state_t *ipcState) {
   uint32_t write_offset = *ipcState->server_buffer->write_offset;
   char *destination = ipcState->server_buffer->memory_block + write_offset;
   return destination;
 }
 
+// responsibility for free on send_ipc_command()
+command_message new_cmd_msg(uint32_t command_type, char *payload) {
+  command_message cmd = {0};
+  cmd.command_type = command_type;
+  if (payload != NULL) {
+    size_t length = strlen(payload);
+    char *cmd_msg_buffer = malloc(sizeof(char) * length + 1);
+
+    if (cmd_msg_buffer == NULL) {
+      return cmd;
+    }
+
+    memcpy(cmd_msg_buffer, payload, length + 1);
+    cmd_msg_buffer[length] = '\0';
+    cmd.payload = cmd_msg_buffer;
+    cmd.payload_size = length;
+  }
+  return cmd;
+}
+
 void send_ipc_command(command_message cmdMsg, ipc_state_t *ipcState) {
-  char *destination = move_destination_pointer(ipcState);
+  char *destination = get_destination_pointer(ipcState);
+  // we move destination pointer on 4 bytes ahead from previous address for each
+  // message field
   memcpy(destination, &cmdMsg.command_type, uint32_size);
-  memcpy(destination + uint32_size, &cmdMsg.payload_size,
-         uint32_size); // copy payload size as the same size as cmd type as they
-                       // both uint_32t
+  memcpy(destination + uint32_size, &cmdMsg.payload_size, uint32_size);
+  if (cmdMsg.payload != NULL) {
+    void *a = memcpy(destination + uint32_size * 2, cmdMsg.payload,
+                     cmdMsg.payload_size);
+  }
 
   eventfd_write(ipcState->uiEventFd, 1);
   u_logger_info("sending message with %d command_type, %d payload_size",
                 cmdMsg.command_type, cmdMsg.payload_size);
   u_logger_info("message payload \n %s", cmdMsg.payload);
+
+  if (cmdMsg.payload != NULL) {
+    free(cmdMsg.payload);
+  }
 }
 
-void request_p2p(ipc_state_t *ipc) {
-  command_message cmd_message = {.command_type = CMD_REQUEST_P2P,
-                                 .payload_size = 0};
+void request_p2p(ipc_state_t *ipc, char *peer_ip) {
+  command_message cmd_message = new_cmd_msg(CMD_REQUEST_P2P, peer_ip);
   send_ipc_command(cmd_message, ipc);
 }
 
@@ -194,6 +226,7 @@ int copy_addrs_to_buffer(char *buffer, char **result_buffer,
   while (str != NULL) {
     char *addr = malloc(sizeof(char) * strlen(str) + 1);
     addr[strlen(str)] = '\0';
+
     if (addr == NULL) {
       u_logger_error("error malloc on addr");
     }
@@ -214,7 +247,7 @@ int copy_addrs_to_buffer(char *buffer, char **result_buffer,
 void processes_ip_addrs_handler(void *command_handler_arg) {
   command_handler_t *command_handler = command_handler_arg;
   data_context_t *data_context = command_handler->data_context_t;
-  int result = reallocate_addr_buffer(data_context);
+  int result = reallocate_local_addr_buffer(data_context);
   if (result == -1) {
     u_logger_error("error reallocating buffer");
     abort();
@@ -226,8 +259,8 @@ void processes_ip_addrs_handler(void *command_handler_arg) {
   int addr_count =
       copy_addrs_to_buffer(command_handler->buffer, result_buffer, count, ",");
   for (int i = 0; i < count; i++) {
-    data_context->addrs_buffer[i] = init_conn_peer();
-    data_context->addrs_buffer[i]->ip = result_buffer[i];
+    data_context->local_addrs_buffer[i] =
+        init_conn_peer(0, 0, result_buffer[i]);
   }
 
   free(command_handler->buffer);
@@ -245,6 +278,14 @@ void process_identify_host_handler(void *command_handler_arg) {
   u_logger_info("%s", data_context->host_addr);
 }
 
+void process_accept_p2p(void *command_handler_arg) {
+  command_handler_t *command_handler = command_handler_arg;
+  data_context_t *data_context = command_handler->data_context_t;
+  char *buffer[1] = {};
+
+  copy_addrs_to_buffer(command_handler->buffer, buffer, 1, ",");
+  add_local_addr(data_context, buffer[0], 1);
+}
 command_handler_t *get_command_handler(data_context_t *data_context,
                                        int cmd_type, char *buffer) {
   command_handler_t *handler = malloc(sizeof(command_handler_t));
@@ -258,6 +299,11 @@ command_handler_t *get_command_handler(data_context_t *data_context,
   case CMD_IDENTIFY_HOST:
     u_logger_info("CMD_IDENTIFY_HOST %d", cmd_type);
     handler->func = process_identify_host_handler;
+    break;
+  case CMD_ACCEPT_P2P:
+    u_logger_info("CMD_ACCEPT_P2P %d", cmd_type);
+    handler->func = process_accept_p2p;
+    break;
   default:
     break;
   }
