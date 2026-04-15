@@ -1,10 +1,11 @@
 package main
 
 import (
-	"file-transfer/bridge"
+	"file-transfer/core"
+	"file-transfer/events"
 	"file-transfer/ipc"
 	"file-transfer/logger"
-	server "file-transfer/peer"
+	server "file-transfer/network"
 	"fmt"
 	"os"
 	"os/signal"
@@ -14,11 +15,16 @@ import (
 func main() {
 	logger.InitLogger()
 	exitSignal := make(chan os.Signal, 1)
-	readWriteMemoryBridgeEndpoint := make(chan *bridge.BridgeMessage)
-	readWriteNetworkBridgeEndpoint := make(chan *bridge.BridgeMessage)
-	p2pServer := server.InitServer(bridge.InitBridge(readWriteNetworkBridgeEndpoint, readWriteMemoryBridgeEndpoint))
+	ipcIn := make(chan *events.EventMsg)
+	ipcOut := make(chan *events.EventMsg)
+	networkIn := make(chan *events.EventMsg)
+	networkOut := make(chan *events.EventMsg)
+	p2pServer := server.InitServer(networkIn, networkOut)
+	dispatcher := core.InitializeDispatcher(ipcIn,
+		ipcOut,
+		networkIn,
+		networkOut)
 
-	ipcBridge := bridge.InitBridge(readWriteMemoryBridgeEndpoint, readWriteNetworkBridgeEndpoint)
 	serverEventFd, err := ipc.InitEventFd()
 	if err != nil {
 		panic(err)
@@ -34,7 +40,8 @@ func main() {
 	config := ipc.InitConfigIPC{
 		ServerEventFd: serverEventFd,
 		GuiEventFd:    uiEventFd,
-		Bridge:        ipcBridge,
+		Ingoing:       ipcIn,
+		Outgoing:      ipcOut,
 	}
 
 	defer func() {
@@ -65,9 +72,11 @@ func main() {
 	signal.Notify(exitSignal, syscall.SIGTERM)
 	signal.Notify(exitSignal, syscall.SIGINT)
 
+	go dispatcher.Dispatch()
 	go ipcState.Listen()
 	go ipcState.ProccessQueue()
 	go p2pServer.Listen()
+	go p2pServer.ProccessQueue()
 	go ipcState.WatchGUIhealth(exitSignal)
 
 	logger.Log.Info("server is working")

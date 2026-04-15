@@ -8,6 +8,8 @@
 
 #include "dependencies/libtinyfiledialogs/tinyfiledialogs.h"
 #include "dependencies/microui/src/microui.h"
+#include "stdbool.h"
+#include "utils.h"
 #include <string.h>
 
 #define FONT_HEIGHT 10
@@ -44,7 +46,8 @@ void handle_input(text_input_buffer *text_buffer) {
     text_buffer->buffer[text_buffer->count] = key;
     text_buffer->buffer[text_buffer->count + 1] = '\0';
     text_buffer->count += 1;
-  } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyDown(KEY_BACKSPACE)) && text_buffer->count >= 0) {
+  } else if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyDown(KEY_BACKSPACE)) &&
+             text_buffer->count >= 0) {
     text_buffer->buffer[text_buffer->count] = '\0';
     if (text_buffer->count > 0) {
       text_buffer->count -= 1;
@@ -75,14 +78,15 @@ void open_file_dialog() {
 }
 
 void send_file_path(void *ipc) {
-  open_file_dialog();
-  while (strlen(selected_file_path) == 0)
-    ;
-  command_message cmd_msg = {0};
-  cmd_msg.command_type = CMD_SEND_FILE_PATH;
-  cmd_msg.payload = selected_file_path;
-  cmd_msg.payload_size = strlen(selected_file_path);
-  send_ipc_command(cmd_msg, ipc);
+
+  // open_file_dialog();
+  // while (strlen(selected_file_path) == 0)
+  //   ;
+  // command_message cmd_msg = {0};
+  // cmd_msg.command_type = CMD_SEND_FILE_PATH;
+  // cmd_msg.json_payload = selected_file_path;
+  // cmd_msg.payload_size = strlen(selected_file_path);
+  // send_ipc_command(cmd_msg, ipc);
 }
 
 void init_rendering(int width, int height) {
@@ -118,6 +122,16 @@ void render_host_addr(data_context_t *data_context, mu_Context *ctx) {
   }
 }
 
+int ask_user_connection_response(mu_Context *ctx) {
+  int response = 0;
+  if (mu_button(ctx, "Accept connection")) {
+    response = 1;
+  } else if (mu_button(ctx, "Refuse connection")) {
+    response = 2;
+  }
+  return response;
+}
+
 void render_address_panel(mu_Context *ctx, thread_pool_t *tpool,
                           ipc_state_t *ipc, char *addr,
                           data_context_t *data_context) {
@@ -128,8 +142,15 @@ void render_address_panel(mu_Context *ctx, thread_pool_t *tpool,
           tpool_add_work(tpool, send_file_path, ipc);
         }
       } else {
-        if (mu_button(ctx, "establish connection")) {
-          request_p2p(ipc, addr);
+        if (is_connection_pending(data_context, addr)) {
+          int response = ask_user_connection_response(ctx);
+          if (response > 0) {
+            accept_p2p(ipc, addr, data_context, response);
+          }
+        } else {
+          if (mu_button(ctx, "establish connection")) {
+            request_p2p(ipc, addr);
+          }
         }
       }
       mu_end_window(ctx);
@@ -139,9 +160,9 @@ void render_address_panel(mu_Context *ctx, thread_pool_t *tpool,
 
 void render_peer_addresses_selection(data_context_t *data_context,
                                      mu_Context *ctx) {
-  for (int i = 0; i < data_context->addr_count; i++) {
-    conn_peer_t *current_addr = data_context->local_addrs_buffer[i];
-    u_logger_info("%s", current_addr->ip);
+  Array_header_t *header = get_header(data_context->local_peers_dynamic_array);
+  for (int i = 0; i < header->count; i++) {
+    conn_peer_t *current_addr = data_context->local_peers_dynamic_array[i];
     if (mu_button(ctx, current_addr->ip)) {
       open_panel(ctx, current_addr->ip);
       address_panel_enabled = true;
@@ -212,7 +233,9 @@ int main(int argc, char *argv[]) {
       }
 
       if (mu_button(ctx, "Connect")) {
-        request_p2p(ipc, text_buffer.buffer);
+        if (strlen(text_buffer.buffer) > 0) {
+          request_p2p(ipc, text_buffer.buffer);
+        }
       }
 
       mu_layout_row(ctx, 1, (int[]){300, 100}, 0);

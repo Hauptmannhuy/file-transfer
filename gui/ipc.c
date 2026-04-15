@@ -1,7 +1,9 @@
 #include "ipc.h"
 #include "data_context.h"
+#include "dependencies/cjson/cJSON.h"
 #include "logger.h"
 #include "tpool.h"
+#include "utils.h"
 #include <errno.h>
 #include <inttypes.h>
 #include <raylib.h>
@@ -10,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
+#include <time.h>
 #include <unistd.h>
 
 #define uint32_size sizeof(uint32_t)
@@ -22,22 +25,101 @@ char *get_destination_pointer(ipc_state_t *ipcState) {
   return destination;
 }
 
+enum json_fields_serialize_num { ip, response_status, local_net_addrs };
+
+const char *json_fields[] = {"ip", "status_response", "local_net_addrs"};
+
+const char *json_data_field = "data";
+const char *json_err_field = "error";
+
+void add_handshake_response_to_json(cJSON *object, int status_accept) {
+  cJSON_bool status;
+  if (status_accept == 1) {
+    status = cJSON_True;
+  } else {
+    status = cJSON_False;
+  }
+
+  cJSON_AddBoolToObject(object, json_fields[response_status], status);
+}
+
+void add_ip_to_json(cJSON *object, char *ip_str) {
+  cJSON_AddStringToObject(object, json_fields[ip], ip_str);
+}
+
+cJSON *make_request_p2p_json(char *ip_str) {
+  cJSON *object = cJSON_CreateObject();
+  add_ip_to_json(object, ip_str);
+  return object;
+}
+
+cJSON *make_accept_p2p_json(int status_accept, char *ip_str) {
+  cJSON *object = cJSON_CreateObject();
+  add_ip_to_json(object, ip_str);
+  add_handshake_response_to_json(object, status_accept);
+  return object;
+}
+
+parsed_json_t *parse_raw_json_bytes(char *json_buffer) {
+  cJSON *parent_json = cJSON_Parse(json_buffer);
+  if (parent_json == NULL) {
+    const char *error = cJSON_GetErrorPtr();
+    u_logger_error("error parse json: %s", error);
+    return NULL;
+  }
+  cJSON *data = cJSON_GetObjectItem(parent_json, json_data_field);
+  if (data == NULL) {
+    u_logger_error("error getting object in json with key", json_data_field);
+    return NULL;
+  }
+  cJSON *err = cJSON_GetObjectItem(parent_json, json_err_field);
+  parsed_json_t *json = malloc(sizeof(parsed_json_t));
+  json->parent_json = parent_json;
+  json->data = data;
+  json->err = err;
+  return json;
+}
+
+int free_json(parsed_json_t *json) {
+  cJSON_free(json->parent_json);
+  free(json);
+  const char *error = cJSON_GetErrorPtr();
+  if (error != NULL) {
+    u_logger_error("error free json: %s", error);
+    return -1;
+  }
+  return 0;
+}
+
 // responsibility for free on send_ipc_command()
-command_message new_cmd_msg(uint32_t command_type, char *payload) {
+command_message new_cmd_msg(uint32_t command_type, cJSON *payload,
+                            char *error) {
+  cJSON *json = cJSON_CreateObject();
   command_message cmd = {0};
-  cmd.command_type = command_type;
+  if (error == NULL) {
+    cJSON_AddNullToObject(json, "error");
+  } else {
+    cJSON_AddStringToObject(json, "error", error);
+  }
   if (payload != NULL) {
-    size_t length = strlen(payload);
+
+    cJSON_AddItemToObject(json, "data", payload);
+    char *json_str_payload = cJSON_PrintUnformatted(json);
+
+    u_logger_info("json %s", json_str_payload);
+    cmd.command_type = command_type;
+    size_t length = strlen(json_str_payload);
     char *cmd_msg_buffer = malloc(sizeof(char) * length + 1);
 
     if (cmd_msg_buffer == NULL) {
       return cmd;
     }
 
-    memcpy(cmd_msg_buffer, payload, length + 1);
+    memcpy(cmd_msg_buffer, json_str_payload, length + 1);
     cmd_msg_buffer[length] = '\0';
-    cmd.payload = cmd_msg_buffer;
+    cmd.json_payload = cmd_msg_buffer;
     cmd.payload_size = length;
+    cJSON_Delete(json);
   }
   return cmd;
 }
@@ -48,23 +130,24 @@ void send_ipc_command(command_message cmdMsg, ipc_state_t *ipcState) {
   // message field
   memcpy(destination, &cmdMsg.command_type, uint32_size);
   memcpy(destination + uint32_size, &cmdMsg.payload_size, uint32_size);
-  if (cmdMsg.payload != NULL) {
-    void *a = memcpy(destination + uint32_size * 2, cmdMsg.payload,
+  if (cmdMsg.json_payload != NULL) {
+    void *a = memcpy(destination + uint32_size * 2, cmdMsg.json_payload,
                      cmdMsg.payload_size);
   }
 
   eventfd_write(ipcState->uiEventFd, 1);
   u_logger_info("sending message with %d command_type, %d payload_size",
                 cmdMsg.command_type, cmdMsg.payload_size);
-  u_logger_info("message payload \n %s", cmdMsg.payload);
+  u_logger_info("message payload \n %s", cmdMsg.json_payload);
 
-  if (cmdMsg.payload != NULL) {
-    free(cmdMsg.payload);
+  if (cmdMsg.json_payload != NULL) {
+    cJSON_free(cmdMsg.json_payload);
   }
 }
 
 void request_p2p(ipc_state_t *ipc, char *peer_ip) {
-  command_message cmd_message = new_cmd_msg(CMD_REQUEST_P2P, peer_ip);
+  command_message cmd_message =
+      new_cmd_msg(CMD_REQUEST_P2P, make_request_p2p_json(peer_ip), NULL);
   send_ipc_command(cmd_message, ipc);
 }
 
@@ -80,8 +163,9 @@ void proccess_message_queue(data_context_t *data_context,
   for (int i = message_queue->head; i < message_queue->tail; i++) {
     command_message cmd = message_queue->buffer[i];
     char *buffer = malloc(sizeof(char) * cmd.payload_size + 1);
-    memcpy(buffer, cmd.payload, cmd.payload_size);
+    memcpy(buffer, cmd.json_payload, cmd.payload_size);
     buffer[cmd.payload_size] = '\0';
+    u_logger_info("received message %s", buffer);
     command_handler_t *handler =
         get_command_handler(data_context, cmd.command_type, buffer);
     tpool_add_work(tpool, handler->func, handler);
@@ -99,8 +183,9 @@ int enqueue_message(command_message cmd, message_queue_t *queue) {
 
   if (queue->tail > message_queue_capacity) {
     u_logger_warn("queue is overload\n");
-    abort();
+    return -1;
   }
+  return 0;
 }
 
 command_message decode_message(ipc_state_t *ipc_state) {
@@ -114,7 +199,7 @@ command_message decode_message(ipc_state_t *ipc_state) {
   ptr_to_payload[message_payload_size] = '\0';
   cmd.command_type = message_type;
   cmd.payload_size = message_payload_size;
-  cmd.payload = ptr_to_payload;
+  cmd.json_payload = ptr_to_payload;
   return cmd;
 }
 
@@ -244,28 +329,42 @@ int copy_addrs_to_buffer(char *buffer, char **result_buffer,
   return num_size;
 }
 
-void processes_ip_addrs_handler(void *command_handler_arg) {
+void process_local_net_peers(void *command_handler_arg) {
   command_handler_t *command_handler = command_handler_arg;
   data_context_t *data_context = command_handler->data_context_t;
-  int result = reallocate_local_addr_buffer(data_context);
-  if (result == -1) {
-    u_logger_error("error reallocating buffer");
-    abort();
+  parsed_json_t *json = parse_raw_json_bytes(command_handler->buffer);
+  if (json == NULL) {
+    goto free_memory;
   }
-  u_logger_info("buffer from received command %s", command_handler->buffer);
-  int count = data_context->addr_capacity;
-  char *result_buffer[count];
 
-  int addr_count =
-      copy_addrs_to_buffer(command_handler->buffer, result_buffer, count, ",");
-  for (int i = 0; i < count; i++) {
-    data_context->local_addrs_buffer[i] =
-        init_conn_peer(0, 0, result_buffer[i]);
+  cJSON *arr = cJSON_GetObjectItem(json->data, json_fields[local_net_addrs]);
+  if (arr == NULL) {
+    u_logger_error("!!!!");
   }
+  int arr_size = cJSON_GetArraySize(arr);
+  u_logger_info("arr size %d", arr_size);
+  for (int i = 0; i < arr_size; i++) {
+    cJSON *current = cJSON_GetArrayItem(arr, i);
+    u_logger_info("current %s", current->valuestring);
+    char *ip = strdup(current->valuestring);
+    if (!ip) {
+      goto free_memory;
+    }
+    if (!includes_peer_ip(data_context->local_peers_dynamic_array, ip)) {
+      array_push(data_context->local_peers_dynamic_array,
+                 init_conn_peer(0, 0, ip));
+    }
+  }
+
+free_memory:
+
+  if (json->parent_json)
+    cJSON_free(json->parent_json);
+  if (json)
+    free(json);
 
   free(command_handler->buffer);
   free(command_handler);
-  data_context->addr_count = addr_count;
 }
 
 void process_identify_host_handler(void *command_handler_arg) {
@@ -278,13 +377,22 @@ void process_identify_host_handler(void *command_handler_arg) {
   u_logger_info("%s", data_context->host_addr);
 }
 
+void accept_p2p(ipc_state_t *ipc, char *peer_ip, data_context_t *data_context,
+                int accept_status) {
+  char *buffer = malloc(1);
+  buffer[0] = accept_status;
+  command_message msg = new_cmd_msg(
+      CMD_ACCEPT_P2P, make_accept_p2p_json(accept_status, peer_ip), NULL);
+  send_ipc_command(msg, ipc);
+}
+
 void process_accept_p2p(void *command_handler_arg) {
   command_handler_t *command_handler = command_handler_arg;
   data_context_t *data_context = command_handler->data_context_t;
   char *buffer[1] = {};
 
   copy_addrs_to_buffer(command_handler->buffer, buffer, 1, ",");
-  add_local_addr(data_context, buffer[0], 1);
+  // add_local_addr(data_context, buffer[0], 1);
 }
 command_handler_t *get_command_handler(data_context_t *data_context,
                                        int cmd_type, char *buffer) {
@@ -294,7 +402,7 @@ command_handler_t *get_command_handler(data_context_t *data_context,
   switch (cmd_type) {
   case CMD_GET_IP_ADDRS:
     u_logger_info("CMD_GET_IP_ADDRS %d", cmd_type);
-    handler->func = processes_ip_addrs_handler;
+    handler->func = process_local_net_peers;
     break;
   case CMD_IDENTIFY_HOST:
     u_logger_info("CMD_IDENTIFY_HOST %d", cmd_type);

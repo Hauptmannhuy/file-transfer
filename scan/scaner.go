@@ -175,12 +175,8 @@ func arpScan(enInterface *net.Interface) []string {
 }
 
 // returns list of ip separated by comma
-func Scan() string {
-	res := arpScanLocalNetwork()
-	if len(res) == 0 {
-		return localAddr.IP.String()
-	}
-	return strings.Join(res, ",")
+func Scan() []string {
+	return arpScanLocalNetwork()
 }
 
 func ping(ip string) {

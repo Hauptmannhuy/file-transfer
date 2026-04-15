@@ -2,39 +2,37 @@ package ipc
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"file-transfer/events"
+	"file-transfer/logger"
 	"fmt"
 	"log"
 	"log/slog"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"unsafe"
-
-	"file-transfer/bridge"
-	"file-transfer/logger"
-	scaner "file-transfer/scan"
 )
 
 type IPCstate struct {
 	AddressSpaceSize int
 	MemoryBlock      []byte
 	cmdHandler       cmdHandler
-	networkBridge    bridge.Bridge
-	guiBuffer        controlBlock
-	serverBuffer     controlBlock
+	ingoing          chan (*events.EventMsg)
+	outgoing         chan (*events.EventMsg)
+	guiBuffer        memoryBlock
+	serverBuffer     memoryBlock
 	uiEventFd        eventfd
 	serverEventFd    eventfd
 	guiProcess       *os.Process
 	ShmFile          *os.File
 
-	guiDispatch chan *cmdMessage
+	guiDispatch chan *EncodedClientMsg
 }
 
-type controlBlock struct {
+type memoryBlock struct {
 	memory      []byte
 	writeOffset uint32
 	readOffset  uint32
@@ -42,7 +40,7 @@ type controlBlock struct {
 }
 
 type cmdHandler struct {
-	Queue  chan cmdMessage
+	Queue  chan EncodedClientMsg
 	Buffer []byte
 }
 
@@ -62,33 +60,42 @@ const (
 
 type cmdAddr uint8
 
-type ClientCommand struct {
-	cmdEnum bridge.ClientCmdEnum
-	fn      func(*IPCstate, ...func() error) error
+type ClientResponse int
+
+const (
+	ClientConnectAccept = iota + 1
+	ClientConnectRefuse
+)
+
+type EncodedClientMsg struct {
+	CmdType        uint32
+	CmdPayloadSize uint32
+	Payload        []byte
 }
 
-type cmdMessage struct {
-	cmdType        uint32
-	cmdPayloadSize uint32
-	payload        []byte
-}
-
-func newMessage(cmdType uint32, payload []byte) *cmdMessage {
-	return &cmdMessage{
-		cmdType:        cmdType,
-		payload:        payload,
-		cmdPayloadSize: uint32(len(payload)),
+func NewEncodedClientMsg(cmdType uint32, payload []byte) *EncodedClientMsg {
+	return &EncodedClientMsg{
+		CmdType:        cmdType,
+		Payload:        payload,
+		CmdPayloadSize: uint32(len(payload)),
 	}
 }
 
 type InitConfigIPC struct {
 	ServerEventFd eventfd
 	GuiEventFd    eventfd
-	Bridge        bridge.Bridge
+	Ingoing       chan (*events.EventMsg)
+	Outgoing      chan (*events.EventMsg)
 }
 
-var ClientCommands []bridge.ClientCmdEnum = []bridge.ClientCmdEnum{
-	bridge.CmdRequestAddresses,
+var ClientCommands []events.ClientCmdEnum = []events.ClientCmdEnum{
+	events.CmdRequestAddresses,
+}
+
+type SerializableFields struct {
+	Err            string `json:"error"`
+	IP             string `json:"ip"`
+	StatusResponse bool   `json:"status_response"`
 }
 
 func InitIPC(config InitConfigIPC) (*IPCstate, error) {
@@ -110,11 +117,11 @@ func InitIPC(config InitConfigIPC) (*IPCstate, error) {
 		return nil, fmt.Errorf("err mapping addr space: %v", err)
 	}
 
-	fblockControl := controlBlock{
+	fblockControl := memoryBlock{
 		memory: block[fblockAddrStart:bblockAddrStart],
 	}
 
-	bblockControl := controlBlock{
+	bblockControl := memoryBlock{
 		memory: block[bblockAddrStart:],
 	}
 
@@ -155,21 +162,21 @@ func InitIPC(config InitConfigIPC) (*IPCstate, error) {
 		AddressSpaceSize: memoryBlockSize,
 		MemoryBlock:      block,
 		cmdHandler: cmdHandler{
-			Queue:  make(chan cmdMessage),
+			Queue:  make(chan EncodedClientMsg),
 			Buffer: block,
 		},
-		networkBridge: config.Bridge,
+		ingoing:       config.Ingoing,
+		outgoing:      config.Outgoing,
 		guiBuffer:     fblockControl,
 		serverBuffer:  bblockControl,
 		ShmFile:       f,
 		serverEventFd: config.ServerEventFd,
 		uiEventFd:     config.GuiEventFd,
 		guiProcess:    cmd.Process,
-		guiDispatch:   make(chan *cmdMessage),
+		guiDispatch:   make(chan *EncodedClientMsg),
 	}
 
 	go ipc.dispatchToGUI()
-	ipc.identifyHost(scaner.GetLocalHostAddr())
 	return ipc, nil
 }
 
@@ -178,15 +185,15 @@ func (ipc *IPCstate) dispatchToGUI() {
 		offset := GetWriteOffset(ipc.guiBuffer.memory)
 		handler := ipc.cmdHandler
 		j := int(offset)
-		binary.NativeEndian.PutUint32(handler.Buffer[j:], msg.cmdType)
-		binary.NativeEndian.PutUint32(handler.Buffer[j+4:], msg.cmdPayloadSize)
-		copy(handler.Buffer[j+8:], msg.payload)
+		binary.NativeEndian.PutUint32(handler.Buffer[j:], msg.CmdType)
+		binary.NativeEndian.PutUint32(handler.Buffer[j+4:], msg.CmdPayloadSize)
+		copy(handler.Buffer[j+8:], msg.Payload)
 		// GUI listens to server with server event fd to handle events, so we write to server eventfd
 		_, err := ipc.serverEventFd.Write(1)
 		if err != nil {
 			logger.Log.Error("error signal to GUI eventfd", "error", slog.AnyValue(err))
 		}
-		logger.Log.Info("message sent to GUI", "cmd_type", msg.cmdType, "payload", string(msg.payload))
+		logger.Log.Info("message sent to GUI", "cmd_type", msg.CmdType, "payload", string(msg.Payload))
 		UpdateWriteOffset(ipc.serverBuffer.memory, getUpdateSize(msg))
 	}
 }
@@ -224,64 +231,60 @@ func CloseEventFds(config InitConfigIPC) error {
 
 func (ipc *IPCstate) ProccessQueue() {
 	ipcHandler := ipc.cmdHandler
-	mutex := &sync.Mutex{}
 	for {
 		select {
-		case ipcCmd := <-ipcHandler.Queue:
-			ipc.processIpcCmd(mutex, ipcCmd)
-		case netBridgeMsg := <-ipc.networkBridge.Get():
-			log.Println("received message from net")
-			ipc.processNetCmd(netBridgeMsg)
+		case encodedClientMsg := <-ipcHandler.Queue:
+			eventMsg := events.EventMsg{
+				Type: events.ClientCmdEnum(encodedClientMsg.CmdType),
+			}
+
+			var rawData struct {
+				Err  error           `json:"error"`
+				Data json.RawMessage `json:"data"`
+			}
+			if len(encodedClientMsg.Payload) > 0 {
+				logger.Log.Info("received raw data from ipc", "data", string(encodedClientMsg.Payload))
+				fmt.Println(encodedClientMsg.Payload)
+				err := json.Unmarshal(encodedClientMsg.Payload, &rawData)
+				if err != nil {
+					logger.Log.Error(err.Error())
+					continue
+				}
+				logger.Log.Info("successfully parsed raw data", "data", rawData)
+				err = json.Unmarshal(rawData.Data, &eventMsg)
+				if err != nil {
+					logger.Log.Error(err.Error())
+				}
+				logger.Log.Info("successfully raw data into event msg data", "data", eventMsg)
+			}
+
+			ipc.outgoing <- &eventMsg
+		case netBridgeMsg := <-ipc.ingoing:
+			ipc.processBusMsg(netBridgeMsg)
 		}
 
 	}
 }
 
-func (ipc *IPCstate) processNetCmd(netBridgeMsg *bridge.BridgeMessage) {
-	switch netBridgeMsg.Type {
-	case bridge.AcceptP2P:
-		ipc.guiDispatch <- newMessage(uint32(netBridgeMsg.Type), []byte(*netBridgeMsg.RequestP2P))
-	}
-}
-
-func (ipc *IPCstate) processIpcCmd(mutex *sync.Mutex, ipcCmd cmdMessage) {
-	mutex.Lock()
-	var data any
-
-	clientCmdType := bridge.ClientCmdEnum(ipcCmd.cmdType)
-
-	switch clientCmdType {
-	case bridge.CmdRequestAddresses:
-		data = scaner.Scan()
-	case bridge.CmdRequestP2P:
-		ip := string(ipcCmd.payload)
-		logger.Log.Info("bridge.CmdRequestP2P", "ip", ip)
-		ipc.networkBridge.Send(&bridge.BridgeMessage{
-			RequestP2P: &ip,
-			Type:       clientCmdType,
-		})
-
-	case bridge.CmdSendFile:
-		// filePath := string(ipcCmd.payload)
-		// get file data and name...
-		msg := &bridge.BridgeMessage{
-			Type: clientCmdType,
-			SendFileData: &bridge.SendFileData{
-				Data:     []byte{},
-				FileName: "name",
-			},
-		}
-		ipc.networkBridge.Send(msg)
-	default:
-		log.Printf("unknown command: %d \n", ipcCmd.cmdType)
-	}
+func (ipc *IPCstate) processBusMsg(msg *events.EventMsg) {
 	var buffer []byte
-	if data != nil {
-		buffer = encodePayload(data)
-		responseMsg := newMessage(ipcCmd.cmdType, buffer)
+	var err error
+	var packet *events.MemoryProtocolPacket
+	logger.Log.Info("received bus message from core", "message", msg)
+	packet = events.EventToMemoryProtocolPacket(msg)
+	if packet != nil {
+		buffer, err = json.Marshal(packet)
+		if err != nil {
+			logger.Log.Error("error encoding response packet", "error", err.Error())
+			return
+		}
+		logger.Log.Info("successfully encoded packet", "packet", packet)
+	}
+	if buffer != nil {
+		buffer = encodePayload(buffer)
+		responseMsg := NewEncodedClientMsg(uint32(msg.Type), buffer)
 		ipc.guiDispatch <- responseMsg
 	}
-	mutex.Unlock()
 }
 
 func (ipcState *IPCstate) Listen() {
@@ -302,7 +305,7 @@ func (ipcState *IPCstate) Listen() {
 		if msg == nil {
 			continue
 		}
-		logger.Log.Info("decoded message", "cmd_type", msg.cmdType)
+		logger.Log.Info("decoded message", "cmd_type", msg.CmdType)
 		updateSize := getUpdateSize(msg)
 		logger.Log.Info("%d", "update_", updateSize)
 		UpdateWriteOffset(ipcState.serverBuffer.memory, updateSize)
@@ -311,7 +314,7 @@ func (ipcState *IPCstate) Listen() {
 	}
 }
 
-func decodeMessage(memory []byte, offset uint32) (*cmdMessage, error) {
+func decodeMessage(memory []byte, offset uint32) (*EncodedClientMsg, error) {
 	commandType := ReadFourBytes(memory, offset)
 	payloadSize := ReadFourBytes(memory, offset+sizeOfUint32)
 	var messagePayload []byte = make([]byte, payloadSize)
@@ -328,11 +331,7 @@ func decodeMessage(memory []byte, offset uint32) (*cmdMessage, error) {
 
 	logger.Log.Info("decoded message from GUI", "commandType", commandType, "payload size", payloadSize, "payload", string(messagePayload))
 
-	return &cmdMessage{
-		cmdType:        commandType,
-		cmdPayloadSize: payloadSize,
-		payload:        messagePayload,
-	}, nil
+	return NewEncodedClientMsg(commandType, messagePayload), nil
 }
 
 func ReadFourBytes(memory []byte, offset uint32) uint32 {
@@ -367,25 +366,18 @@ func encodePayload(data any) []byte {
 	case string:
 		length = len((d))
 		data = []byte(d)
+	case []byte:
+		length = len(d)
 	}
-
+	logger.Log.Info("encoding message to gui", "message", data)
 	buffer := make([]byte, length)
 	_, err := binary.Encode(buffer, binary.NativeEndian, data)
 	if err != nil {
-		fmt.Printf("error encoding message %s", err.Error())
-		os.Exit(-1)
+		logger.Log.Error("error encoding message to gui", "error", err.Error())
 	}
 	return buffer
 }
 
-func getUpdateSize(msg *cmdMessage) uint32 {
-	return msg.cmdPayloadSize + uint32(unsafe.Sizeof(msg.cmdType))
-}
-
-func (ipcState *IPCstate) identifyHost(localHostAddr *net.IPNet) {
-	addr := localHostAddr.IP.String()
-	buffer := encodePayload(addr)
-	message := newMessage(uint32(bridge.CmdIdentifyHost), buffer)
-	ipcState.guiDispatch <- message
-
+func getUpdateSize(msg *EncodedClientMsg) uint32 {
+	return msg.CmdPayloadSize + uint32(unsafe.Sizeof(msg.CmdType))
 }

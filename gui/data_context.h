@@ -7,14 +7,13 @@ typedef struct conn_peer_t {
 } conn_peer_t;
 
 typedef struct data_context_t {
-  conn_peer_t **local_addrs_buffer;
+  conn_peer_t **local_peers_dynamic_array;
   char *host_addr;
-  int addr_capacity;
-  int addr_count;
 } data_context_t;
 
 int is_connection_established(data_context_t *data_context, char *ip);
-int reallocate_local_addr_buffer(data_context_t *data_context);
-int add_local_addr(data_context_t *data_context, char *ip, int pending);
+int is_connection_pending(data_context_t *data_context, char *ip);
+bool includes_peer_ip(conn_peer_t **dynamic_array, char *ip);
+
 conn_peer_t *init_conn_peer(int connected, int pending, char *ip);
 data_context_t *data_context_init();

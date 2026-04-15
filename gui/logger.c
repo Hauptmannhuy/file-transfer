@@ -1,6 +1,4 @@
 #include <pthread.h>
-#include <stdlib.h>
-
 #include "logger.h"
 
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;

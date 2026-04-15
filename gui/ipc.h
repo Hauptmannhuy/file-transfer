@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "data_context.h"
+#include "dependencies/cjson/cJSON.h"
 #include "tpool.h"
 
 #define FILE_NAME "mySharedMem"
@@ -22,10 +23,16 @@
 #define CONTROL_BLOCK_SIZE 16
 #define message_queue_capacity 256
 
+typedef struct parsed_json_t {
+  cJSON *parent_json;
+  cJSON *data;
+  cJSON *err;
+} parsed_json_t;
+
 typedef struct {
   uint32_t command_type;
   uint32_t payload_size;
-  char *payload;
+  char *json_payload;
 } command_message;
 
 typedef struct {
@@ -99,4 +106,6 @@ command_handler_t *get_command_handler(data_context_t *data_context,
                                        int cmd_type, char *buffer);
 
 void request_p2p(ipc_state_t *ipc, char *peer_ip);
+void accept_p2p(ipc_state_t *ipc, char *peer_ip, data_context_t *data_context,
+                int accept_status);
 void get_local_network_hosts(ipc_state_t *ipc);
