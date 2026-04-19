@@ -78,17 +78,24 @@ func initListener() (*net.TCPListener, error) {
 func (server P2Pserver) ConnectToPeer(ipStr string) (*net.TCPConn, error) {
 	logger.Log.Info(ipStr)
 	var ip net.IP = net.ParseIP(ipStr)
-	var raddr *net.TCPAddr
+	if ip == nil {
+		return nil, fmt.Errorf("couldn't parse string %s into ip", ipStr)
+	}
+
 	var err error
 	listenerPort := strconv.Itoa(int(listenerPort))
 
-	raddr, err = net.ResolveTCPAddr("tcp", ip.String()+":"+listenerPort)
 	if err != nil {
 		logger.Log.Error("error resolving raddr", "ip", ip.String(), "error", err.Error())
 		return nil, err
 	}
 
-	conn, err := net.DialTCP("tcp", nil, raddr)
+	// conn, err := net.DialTCP("tcp", nil, raddr)
+	d := net.Dialer{
+		Timeout: 5 * time.Second,
+	}
+	conn, err := d.Dial("tcp", fmt.Sprintf("%s:%s", ipStr, listenerPort))
+	d.DialUDP()
 	var netError net.Error
 	if err == nil {
 		logger.Log.Info("dial tcp is successfull..?")
@@ -126,7 +133,6 @@ func (server P2Pserver) ProccessQueue() {
 				response := events.EventMsg{
 					Type:    events.ResponseAcceptP2P,
 					Err:     err,
-					IP:      conn.RemoteAddr().String(),
 					RawConn: conn,
 				}
 				server.outgoing <- &response

@@ -50,6 +50,10 @@ func (dispatcher *Dispatcher) Dispatch() {
 
 func (dispatcher *Dispatcher) dispatchNetworkMsg(msg *events.EventMsg) {
 	var ingoingMsg events.EventMsg
+	if msg.Err != nil {
+		dispatcher.guiIn <- msg
+		return
+	}
 	switch msg.Type {
 	case events.RequestAcceptP2P:
 
@@ -61,6 +65,8 @@ func (dispatcher *Dispatcher) dispatchNetworkMsg(msg *events.EventMsg) {
 
 		dispatcher.pendingConnections[msg.IP] = protocol.NewPeerConn(msg.IP, ingoingMsg.RawConn)
 		dispatcher.guiIn <- msg
+	case events.ResponseAcceptP2P:
+
 	}
 }
 

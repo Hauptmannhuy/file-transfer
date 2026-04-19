@@ -260,13 +260,13 @@ func (ipc *IPCstate) ProccessQueue() {
 
 			ipc.outgoing <- &eventMsg
 		case netBridgeMsg := <-ipc.ingoing:
-			ipc.processBusMsg(netBridgeMsg)
+			ipc.processIngoingMsg(netBridgeMsg)
 		}
 
 	}
 }
 
-func (ipc *IPCstate) processBusMsg(msg *events.EventMsg) {
+func (ipc *IPCstate) processIngoingMsg(msg *events.EventMsg) {
 	var buffer []byte
 	var err error
 	var packet *events.MemoryProtocolPacket
