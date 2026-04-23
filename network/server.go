@@ -95,11 +95,11 @@ func (server P2Pserver) ConnectToPeer(ipStr string) (*net.TCPConn, error) {
 		Timeout: 5 * time.Second,
 	}
 	conn, err := d.Dial("tcp", fmt.Sprintf("%s:%s", ipStr, listenerPort))
-	d.DialUDP()
+	// d.DialUDP()
 	var netError net.Error
 	if err == nil {
 		logger.Log.Info("dial tcp is successfull..?")
-		err := server.RequestHandshake(conn)
+		err := server.RequestHandshake(nil)
 		if err != nil {
 			logger.Log.Error(err.Error())
 			if err := conn.Close(); err != nil {
@@ -116,7 +116,7 @@ func (server P2Pserver) ConnectToPeer(ipStr string) (*net.TCPConn, error) {
 		}
 	}
 	logger.Log.Error(err.Error())
-	return conn, err
+	return nil, err
 }
 func (server P2Pserver) ProccessQueue() {
 	for msg := range server.ingoing {

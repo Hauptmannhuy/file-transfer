@@ -6,6 +6,7 @@ import (
 	"file-transfer/ipc"
 	"file-transfer/logger"
 	server "file-transfer/network"
+	"file-transfer/network/signaling"
 	"fmt"
 	"os"
 	"os/signal"
@@ -72,6 +73,7 @@ func main() {
 	signal.Notify(exitSignal, syscall.SIGTERM)
 	signal.Notify(exitSignal, syscall.SIGINT)
 
+	go signaling.Listen()
 	go dispatcher.Dispatch()
 	go ipcState.Listen()
 	go ipcState.ProccessQueue()
